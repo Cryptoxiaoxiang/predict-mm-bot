@@ -99,6 +99,7 @@ python -m predict_mm.main --config config.toml
 - `交易 outcome`：每个市场分别选择 `YES` 或 `NO`；
 - `单次挂单数量`：每个市场分别设置。首次建议使用很小的数字，例如 `1`；
 - `单市场最大仓位`、`总最大仓位`：所有市场共用的风险上限，首次可设为 `2`、`5`。
+- `买单成交后，立即以 0.01 紧急卖出`：默认关闭。开启后，买单出现成交（包括部分成交）时，机器人会撤掉该市场其余订单、停止继续报价，并以 `0.01` 的非 post-only 卖单卖出已成交数量。该设置会造成极大的确定性损失，只应在你明确接受这一结果时开启。
 
 `PREDICT_ACCOUNT_ADDRESS` 是公开的钱包/交易账户地址，不是私钥。只有真实挂单时才需要填写，并且必须与私钥对应。
 
@@ -132,6 +133,7 @@ python -m predict_mm.main --config config.toml
 - `max_position_per_market`：单个市场允许的最大仓位；
 - `max_total_position`：所有市场合计允许的最大仓位；
 - `dry_run`：是否处于模拟运行。
+- `emergency_exit_on_buy_fill`：买单成交后是否以 `0.01` 紧急卖出；默认 `false`。
 
 配置修改后，停止机器人再重新启动即可生效。
 

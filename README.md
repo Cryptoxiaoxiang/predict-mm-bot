@@ -33,6 +33,15 @@ python3 --version
 
 如果最后显示的版本低于 3.11，请改用 Ubuntu 24.04 服务器，或先将服务器的 Python 升级到 3.11 以上再继续。
 
+如果执行 `python3 -m venv .venv` 时提示缺少 `ensurepip` 或虚拟环境组件，请安装与当前 Python **相同版本**的 venv 包后重试。例如服务器显示的是 Python 3.12：
+
+```bash
+sudo apt update
+sudo apt install -y python3.12-venv
+```
+
+Python 3.11 则对应使用 `python3.11-venv`。不要在没有确认 Python 版本的情况下盲目复制版本号。
+
 ## 在服务器上部署网页控制台（推荐）
 
 登录服务器后，先下载项目并进入目录：
@@ -42,13 +51,26 @@ git clone https://github.com/Cryptoxiaoxiang/predict-mm-bot.git
 cd predict-mm-bot
 ```
 
+### 如果 `git clone` 失败
+
+部分 VPS 网络会把公开仓库的克隆错误地显示为“仓库不存在”或出现 HTTPS 连接问题。这不一定是仓库私有、账号或 Token 的问题。可以改用 GitHub 的官方源码下载地址：
+
+```bash
+cd /root
+curl -L https://codeload.github.com/Cryptoxiaoxiang/predict-mm-bot/tar.gz/refs/heads/main -o predict-mm-bot.tar.gz
+tar -xzf predict-mm-bot.tar.gz
+mv predict-mm-bot-main predict-mm-bot
+cd predict-mm-bot
+```
+
+仓库是公开的，以上方式不需要输入 GitHub 密码或 Token。以后更新代码时，重复下载并解压到一个临时目录，再只覆盖程序文件；不要覆盖 `.env` 和 `config.toml`。
+
 安装依赖并启动网页控制台：
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-python -m predict_mm.web
+.venv/bin/python -m pip install -e .
+.venv/bin/python -m predict_mm.web
 ```
 
 如果网页运行在远程服务器上，网页不会直接暴露到公网。请在自己的电脑终端建立 SSH 隧道：
@@ -60,7 +82,7 @@ ssh -L 8080:127.0.0.1:8080 用户名@服务器IP
 
 然后将终端保持在打开状态,在自己电脑浏览器打开 `http://127.0.0.1:8080`。
 
-如果希望退出 SSH 后网页仍持续运行：
+确认网页能启动后，按 `Ctrl+C` 停止前台服务。若希望退出 SSH 后网页仍持续运行：
 
 ```bash
 mkdir -p logs
@@ -72,6 +94,14 @@ nohup .venv/bin/python -m predict_mm.web > logs/web-console.log 2>&1 &
 ```bash
 tail -f logs/web-console.log
 ```
+
+确认服务是否真的启动成功：
+
+```bash
+curl --max-time 5 -o /dev/null -s -w '%{http_code}\n' http://127.0.0.1:8080
+```
+
+返回 `200` 代表网页控制台可用；如果返回 `000`，请查看上一条日志命令的错误信息。
 
 第一次打开网页时，先在“账户设置”填写 API Key 等账户信息并点“保存账户设置”；再填写第一个市场的 Market ID、交易方向和风险限制，需要更多市场时点“添加市场”，最后点“保存配置”。机器人会生成两个只保存在服务器上的配置文件：
 
@@ -143,6 +173,37 @@ python -m predict_mm.main --config config.toml
 - `emergency_exit_on_buy_fill`：买单被吃单后是否以 `0.01` 紧急卖出；默认 `true`。
 
 配置修改后，停止机器人再重新启动即可生效。
+
+## 部署排错
+
+### 启动时出现 `/opt/homebrew/.../shellenv.sh` 和 `SyntaxError`
+
+如果错误显示类似下面的内容，并且位置是某个 `.py` 文件的第 1 行：
+
+```text
+/opt/homebrew/Library/Homebrew/cmd/shellenv.sh: line 9: /bin/ps: Operation not permitted
+SyntaxError: invalid syntax
+```
+
+这说明代码文件被一行本机终端提示文字污染了，并非 VPS、钱包或 Predict.fun API 的问题。请从 GitHub 重新下载干净源码后，仅覆盖服务器项目中的 `predict_mm/` 目录：
+
+```bash
+cd /root
+mkdir -p predict-mm-repair
+curl -L https://codeload.github.com/Cryptoxiaoxiang/predict-mm-bot/tar.gz/refs/heads/main -o predict-mm-repair/repo.tar.gz
+tar -xzf predict-mm-repair/repo.tar.gz -C predict-mm-repair
+cp -r predict-mm-repair/predict-mm-bot-main/predict_mm/. predict-mm-bot/predict_mm/
+```
+
+然后重新执行后台启动命令。维护代码时，不要把终端的完整输出直接复制到 Python 文件；只复制源代码本身。
+
+### 网页没法打开
+
+按顺序检查：
+
+1. VPS 上的 `curl` 检查是否返回 `200`；
+2. 本机 SSH 隧道是否仍在运行；
+3. 浏览器访问的是否为 `http://127.0.0.1:8080`，而不是 VPS 的公网 IP。
 
 ## 长时间运行（Docker）
 

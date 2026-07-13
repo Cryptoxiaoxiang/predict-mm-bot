@@ -118,12 +118,3 @@ predict_mm/
   logging.py       # 日志
 tests/
 ```
-
-## 已对齐的官方接口
-
-- `GET /v1/markets/{id}/orderbook`
-- `GET /v1/positions`
-- `GET /v1/orders`
-- `POST /v1/orders`
-- `POST /v1/orders/remove`
-- 官方 Python SDK：`predict-sdk`

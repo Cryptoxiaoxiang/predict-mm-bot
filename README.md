@@ -61,7 +61,6 @@ enabled = true
 ```env
 PREDICT_API_BASE_URL=https://api.predict.fun
 PREDICT_API_KEY=
-# 可选：实盘创建 / 撤销订单等钱包相关操作需要 JWT Token
 PREDICT_JWT_TOKEN=
 ```
 

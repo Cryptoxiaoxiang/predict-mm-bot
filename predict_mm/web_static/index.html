@@ -36,11 +36,12 @@
           <form id="account-form">
             <div class="form-grid">
               <label>API Key<input name="api_key" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
-              <label>JWT Token<input name="jwt_token" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
+              <label>JWT Token<input name="jwt_token" type="password" autocomplete="off" placeholder="自动生成时无需填写；留空则不修改" /></label>
               <label>钱包 Private Key<input name="private_key" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
               <label>Predict Account Address<input name="predict_account_address" placeholder="公开钱包地址" /></label>
               <label>日志级别<select name="log_level"><option>INFO</option><option>DEBUG</option><option>WARNING</option><option>ERROR</option></select></label>
             </div>
+            <label class="switch"><input name="generate_jwt" type="checkbox" /><span class="label-with-help">保存时自动生成 JWT（EOA 钱包） <span class="tooltip" tabindex="0" aria-label="查看自动生成 JWT 说明">?<span class="tooltip-text" role="tooltip">机器人会用本机/VPS 内存中的 EOA 私钥签署 Predict.fun 的动态 message；私钥不会发送给 Predict.fun，也不会写入日志。仅地址、签名和 message 会提交以换取 JWT。</span></span></span></label>
             <button class="primary" type="submit">保存账户设置</button>
           </form>
         </div>

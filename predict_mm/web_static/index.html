@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Predict.fun 自动挂单机器人</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header>
+        <div>
+          <p class="eyebrow">PREDICT.FUN</p>
+          <h1>自动挂单控制台</h1>
+          <p class="subtitle">先模拟，再实盘。私钥只保存在这台服务器。</p>
+        </div>
+        <div id="mode-badge" class="badge">正在检查配置</div>
+      </header>
+
+      <section class="dashboard" aria-label="机器人状态">
+        <article><span>状态</span><strong id="run-status">未配置</strong></article>
+        <article><span>市场</span><strong id="market-value">—</strong></article>
+        <article><span>方向</span><strong id="outcome-value">—</strong></article>
+        <article><span>单次数量</span><strong id="size-value">—</strong></article>
+      </section>
+
+      <section id="notice" class="notice" hidden></section>
+
+      <section class="card controls">
+        <div>
+          <h2>运行控制</h2>
+          <p>启动前请确认当前模式和市场信息。</p>
+        </div>
+        <div class="button-row">
+          <button id="start-button" class="primary">启动机器人</button>
+          <button id="stop-button" class="secondary">停止并撤单</button>
+          <button id="cancel-button" class="danger">撤销当前市场订单</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="section-heading">
+          <div>
+            <h2>首次配置 / 修改配置</h2>
+            <p>密钥输入框留空时，会保留已经保存的值。</p>
+          </div>
+          <span id="secret-status" class="muted"></span>
+        </div>
+        <form id="setup-form">
+          <div class="form-grid">
+            <label>Market ID<input name="market_id" required placeholder="要运行的市场 ID" /></label>
+            <label>交易方向<select name="outcome"><option>YES</option><option>NO</option></select></label>
+            <label>单次挂单数量<input name="quote_size" inputmode="decimal" value="1.0" required /></label>
+            <label>单市场最大仓位<input name="max_position_per_market" inputmode="decimal" value="10.0" required /></label>
+            <label>总最大仓位<input name="max_total_position" inputmode="decimal" value="50.0" required /></label>
+            <label>撤单等待秒数<input name="cancel_after_seconds" inputmode="decimal" value="8" required /></label>
+          </div>
+
+          <label class="switch"><input type="checkbox" name="dry_run" checked /><span>使用模拟运行（不会真实下单）</span></label>
+
+          <details>
+            <summary>实盘和高级选项</summary>
+            <p class="details-note">只有关闭模拟运行、准备实盘时才需要填写。请勿把这些信息发送给任何人。</p>
+            <div class="form-grid">
+              <label>API Key<input name="api_key" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
+              <label>JWT Token<input name="jwt_token" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
+              <label>钱包 Private Key<input name="private_key" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
+              <label>Predict Account Address<input name="predict_account_address" placeholder="公开钱包地址" /></label>
+              <label>Token ID<input name="token_id" placeholder="通常可留空自动获取" /></label>
+              <label>费率（fee rate bps）<input name="fee_rate_bps" value="0" inputmode="numeric" /></label>
+              <label>Chain ID<input name="chain_id" value="56" inputmode="numeric" /></label>
+              <label>日志级别<select name="log_level"><option>INFO</option><option>DEBUG</option><option>WARNING</option><option>ERROR</option></select></label>
+            </div>
+            <div class="checkbox-row">
+              <label><input type="checkbox" name="is_neg_risk" /> is_neg_risk</label>
+              <label><input type="checkbox" name="is_yield_bearing" /> is_yield_bearing</label>
+            </div>
+          </details>
+          <button class="primary" type="submit">保存配置</button>
+        </form>
+      </section>
+
+      <section class="card logs-card">
+        <div class="section-heading"><div><h2>运行日志</h2><p>每 2 秒自动刷新。</p></div><button id="refresh-logs" class="text-button">刷新</button></div>
+        <pre id="logs">等待日志…</pre>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

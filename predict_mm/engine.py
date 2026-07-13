@@ -37,6 +37,30 @@ class MarketMakerEngine:
     def request_stop(self) -> None:
         self._stop.set()
 
+    def active_order_markets(self) -> list[dict[str, object]]:
+        summaries: dict[str, dict[str, object]] = {}
+        for order in self.open_orders.values():
+            if order.status != OrderStatus.OPEN:
+                continue
+            summary = summaries.setdefault(
+                order.quote.market_id,
+                {
+                    "market_id": order.quote.market_id,
+                    "outcome": order.quote.outcome,
+                    "buy_orders": 0,
+                    "sell_orders": 0,
+                    "emergency_exit_orders": 0,
+                },
+            )
+            side_key = "buy_orders" if order.quote.side == Side.BUY else "sell_orders"
+            summary[side_key] = int(summary[side_key]) + 1
+            if order.is_emergency_exit:
+                summary["emergency_exit_orders"] = int(summary["emergency_exit_orders"]) + 1
+        return list(summaries.values())
+
+    async def cancel_all_orders(self) -> None:
+        await self._cancel_all_known_markets()
+
     async def run(self) -> None:
         logger.info(
             "Starting market maker: dry_run=%s, markets=%s",

@@ -12,7 +12,6 @@ class WizardAnswers:
     jwt_token: str = ""
     private_key: str = ""
     predict_account_address: str = ""
-    chain_id: str = "56"
     log_level: str = "INFO"
     dry_run: bool = True
     market_id: str = ""
@@ -38,7 +37,6 @@ def run_setup_wizard(config_path: str | Path = "config.toml", env_path: str | Pa
         jwt_token=_ask_secret("JWT Token，实盘/查询个人订单需要，可先留空"),
         private_key=_ask_secret("钱包 Private Key，实盘签单需要，可先留空"),
         predict_account_address=_ask("Predict Account Address，可先留空", ""),
-        chain_id=_ask("Chain ID，Predict.fun 当前默认 BNB Chain", "56"),
         log_level=_ask("日志级别", "INFO").upper(),
         dry_run=_ask_bool("是否先使用 dry-run 模拟运行？强烈建议选 yes", True),
         market_id=_ask_required("要运行的 Market ID"),
@@ -68,7 +66,6 @@ def build_env_text(answers: WizardAnswers) -> str:
             f"PREDICT_JWT_TOKEN={answers.jwt_token}",
             f"PREDICT_PRIVATE_KEY={answers.private_key}",
             f"PREDICT_ACCOUNT_ADDRESS={answers.predict_account_address}",
-            f"PREDICT_CHAIN_ID={answers.chain_id}",
             f"LOG_LEVEL={answers.log_level}",
             "",
         ]

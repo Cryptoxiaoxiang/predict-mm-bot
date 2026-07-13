@@ -25,8 +25,15 @@ function isPredictMarketUrl(value) {
 
 async function request(path, options = {}) {
   const response = await fetch(path, options);
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.detail || '操作失败，请查看日志。');
+  const body = await response.text();
+  let data = {};
+  try {
+    data = body ? JSON.parse(body) : {};
+  } catch (_) {
+    if (!response.ok) throw new Error(`服务器错误（${response.status}），请查看运行日志。`);
+    throw new Error('服务器返回了无法识别的数据。');
+  }
+  if (!response.ok) throw new Error(data.detail || `操作失败（${response.status}），请查看日志。`);
   return data;
 }
 

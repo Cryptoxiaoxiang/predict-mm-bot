@@ -82,3 +82,21 @@ def test_quote_metadata_can_be_completed_from_market_response() -> None:
     assert completed.fee_rate_bps == 12
     assert completed.is_neg_risk is False
     assert completed.is_yield_bearing is True
+
+
+def test_wallet_fill_event_uses_confirmed_fill_size() -> None:
+    client = PredictClient(Settings(), dry_run=True)
+
+    event = client._wallet_fill_event(
+        {
+            "type": "orderTransactionSuccess",
+            "orderId": "order-1",
+            "orderHash": "hash-1",
+            "fill": {"executedSizeWei": "2500000000000000000"},
+        }
+    )
+
+    assert event is not None
+    assert event.order_id == "order-1"
+    assert event.order_hash == "hash-1"
+    assert event.filled_size == Decimal("2.5")

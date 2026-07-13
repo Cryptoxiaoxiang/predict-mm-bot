@@ -208,6 +208,27 @@ function renderOpenOrders(orders = []) {
   });
 }
 
+function formatBalance(value) {
+  const balance = Number(value);
+  if (!Number.isFinite(balance)) return String(value);
+  return balance.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 4});
+}
+
+async function refreshBalance() {
+  const value = document.querySelector('#balance-value');
+  const note = document.querySelector('#balance-note');
+  try {
+    const balance = await request('/api/balance');
+    value.textContent = `${formatBalance(balance.balance)} ${balance.asset}`;
+    note.textContent = '链上余额 · 每 30 秒刷新';
+    value.title = balance.account_address;
+  } catch (error) {
+    value.textContent = '余额不可用';
+    note.textContent = error.message;
+    value.removeAttribute('title');
+  }
+}
+
 async function refreshStatus() {
   try {
     const status = await request('/api/status');
@@ -313,4 +334,6 @@ document.querySelector('#refresh-logs').addEventListener('click', refreshLogs);
 renderMarkets();
 refreshStatus();
 refreshLogs();
+refreshBalance();
 setInterval(() => { refreshStatus(); refreshLogs(); }, 2000);
+setInterval(refreshBalance, 30000);

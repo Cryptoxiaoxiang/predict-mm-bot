@@ -1,4 +1,3 @@
-/opt/homebrew/Library/Homebrew/cmd/shellenv.sh: line 9: /bin/ps: Operation not permitted
 # Predict.fun 自动挂单机器人
 
 这是一个为 Predict.fun 设计的自动挂单、撤单和重新报价工具。它会按设定的节奏管理订单，并提供仓位与订单数量限制。

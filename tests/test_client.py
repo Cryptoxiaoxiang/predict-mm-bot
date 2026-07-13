@@ -1,4 +1,3 @@
-/opt/homebrew/Library/Homebrew/cmd/shellenv.sh: line 9: /bin/ps: Operation not permitted
 from decimal import Decimal
 import asyncio
 
@@ -58,6 +57,20 @@ def test_orderbook_uses_cached_market_precision() -> None:
     assert first.tick_size == Decimal("0.01")
     assert second.tick_size == Decimal("0.01")
     assert client.paths.count("/v1/markets/1") == 1
+
+
+def test_market_search_uses_official_search_endpoint() -> None:
+    class StubClient(PredictClient):
+        async def _request(self, method, path, payload=None, query=None):  # type: ignore[no-untyped-def]
+            assert method == "GET"
+            assert path == "/v1/search"
+            assert query == {"query": "bitcoin", "limit": 10}
+            return {"data": {"markets": [{"id": 123, "question": "Bitcoin?"}]}}
+
+    client = StubClient(Settings(api_key="api-key"), dry_run=False)
+    markets = asyncio.run(client.search_markets("bitcoin"))
+
+    assert markets == [{"id": 123, "question": "Bitcoin?"}]
 
 
 def test_real_order_requires_sdk_inputs() -> None:

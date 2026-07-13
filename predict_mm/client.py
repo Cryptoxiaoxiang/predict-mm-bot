@@ -14,7 +14,7 @@ from time import monotonic
 from uuid import uuid4
 
 from predict_mm.config import Settings
-from predict_mm.models import Level, ManagedOrder, OrderBook, OrderStatus, Quote, WalletFillEvent
+from predict_mm.models import Level, ManagedOrder, OrderBook, OrderStatus, Quote, Side, WalletFillEvent
 
 logger = logging.getLogger("predict-mm")
 
@@ -140,12 +140,13 @@ class PredictClient:
         if self.dry_run:
             order = ManagedOrder(order_id=f"dry-{uuid4().hex[:12]}", quote=quote, created_at=monotonic())
             self._dry_orders[order.order_id] = order
+            display_side, display_outcome = self._display_order_intent(quote, post_only=post_only)
             logger.info(
                 "DRY-RUN create%s %s %s %s @ %s on %s",
                 " emergency" if not post_only else "",
-                quote.side,
+                display_side,
                 quote.size,
-                quote.outcome,
+                display_outcome,
                 quote.price,
                 quote.market_id,
             )
@@ -618,6 +619,21 @@ class PredictClient:
                 or ""
             )
         return str(outcome or "")
+
+    @staticmethod
+    def _display_order_intent(quote: Quote, *, post_only: bool) -> tuple[Side, str]:
+        """Express passive binary asks as bids on the complementary outcome in logs.
+
+        Predict's API submits a sell order for the selected token. For the normal
+        two-sided maker quote, users more naturally read that as buying the other
+        choice. This is a display-only conversion; it never changes the submitted
+        order or its price. Emergency exits remain explicit sell orders.
+        """
+        complementary_outcomes = {"YES": "NO", "NO": "YES"}
+        outcome = quote.outcome.strip().upper()
+        if post_only and quote.side == Side.SELL and outcome in complementary_outcomes:
+            return Side.BUY, complementary_outcomes[outcome].title()
+        return quote.side, quote.outcome
 
     def _to_wei(self, value: Decimal) -> int:
         return int(value * Decimal(10**18))

@@ -1,5 +1,6 @@
 from decimal import Decimal
 import asyncio
+import json
 
 from predict_mm.client import PredictClient
 from predict_mm.config import Settings
@@ -100,6 +101,33 @@ def test_market_search_includes_markets_nested_under_categories() -> None:
 
     assert [market["id"] for market in markets] == [1, 2]
     assert markets[1]["categoryTitle"] == "France vs. Spain"
+
+
+def test_public_page_category_payload_is_converted_to_market_choices() -> None:
+    hydrated_data = {
+        "state": {
+            "data": {
+                "id": "749900",
+                "title": "FRA",
+                "category": {
+                    "id": "fifwc-fra-esp-2026-07-14",
+                    "title": "France vs. Spain",
+                },
+                "outcomes": {"edges": [{"node": {"name": "Yes"}}, {"node": {"name": "No"}}]},
+            }
+        }
+    }
+    client = PredictClient(Settings(), dry_run=True)
+
+    markets = client._markets_from_next_query_payload(
+        "48:" + json.dumps([hydrated_data]),
+        "fifwc-fra-esp-2026-07-14",
+        json.JSONDecoder(),
+    )
+
+    assert markets[0]["id"] == "749900"
+    assert markets[0]["title"] == "FRA"
+    assert markets[0]["categoryTitle"] == "France vs. Spain"
 
 
 def test_eoa_jwt_signs_the_dynamic_message_locally() -> None:

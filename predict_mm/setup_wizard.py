@@ -23,6 +23,14 @@ class WizardAnswers:
     max_total_position: str = "50.0"
 
 
+@dataclass(frozen=True)
+class MarketAnswers:
+    market_id: str
+    outcome: str = "YES"
+    quote_size: str = "1.0"
+    token_id: str = ""
+
+
 def run_setup_wizard(config_path: str | Path = "config.toml", env_path: str | Path = ".env") -> None:
     config_file = Path(config_path)
     env_file = Path(env_path)
@@ -70,7 +78,25 @@ def build_env_text(answers: WizardAnswers) -> str:
     )
 
 
-def build_config_text(answers: WizardAnswers) -> str:
+def build_config_text(answers: WizardAnswers, markets: list[MarketAnswers] | None = None) -> str:
+    configured_markets = markets or [
+        MarketAnswers(
+            market_id=answers.market_id,
+            outcome=answers.outcome,
+            quote_size=answers.quote_size,
+            token_id=answers.token_id,
+        )
+    ]
+    markets_text = "\n".join(
+        f'''[[markets]]
+id = "{_toml_escape(market.market_id)}"
+enabled = true
+outcome = "{market.outcome}"
+quote_size = "{_toml_escape(market.quote_size)}"
+token_id = "{_toml_escape(market.token_id)}"
+'''
+        for market in configured_markets
+    )
     return f"""dry_run = {_toml_bool(answers.dry_run)}
 poll_interval_seconds = 2.0
 cancel_after_seconds = {answers.cancel_after_seconds}
@@ -78,11 +104,7 @@ replace_on_orderbook_change = true
 cancel_all_on_start = true
 cancel_all_on_shutdown = true
 
-[[markets]]
-id = "{_toml_escape(answers.market_id)}"
-enabled = true
-outcome = "{answers.outcome}"
-token_id = "{_toml_escape(answers.token_id)}"
+{markets_text}
 
 [strategy]
 tick_size = "0.001"

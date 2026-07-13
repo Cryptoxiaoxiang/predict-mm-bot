@@ -35,6 +35,20 @@ function setField(name, value, target = form) {
   if (field && value !== undefined && value !== null) field.value = value;
 }
 
+function setOutcomeOptions(row, outcomes, selected = '') {
+  const select = row.querySelector('[data-field="outcome"]');
+  const values = [...new Set((outcomes || []).map((value) => String(value).trim()).filter(Boolean))];
+  if (!values.length) values.push('YES', 'NO');
+  if (selected && !values.includes(selected)) values.push(selected);
+  select.replaceChildren(...values.map((value) => {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = value;
+    return option;
+  }));
+  select.value = selected && values.includes(selected) ? selected : values[0];
+}
+
 function renumberMarkets() {
   [...marketsList.querySelectorAll('.market-row')].forEach((row, index) => {
     row.querySelector('.market-title').textContent = `市场 ${index + 1}`;
@@ -46,7 +60,7 @@ function addMarket(market = {}) {
   const row = marketTemplate.content.firstElementChild.cloneNode(true);
   const marketIdInput = row.querySelector('[data-field="market_id"]');
   marketIdInput.value = market.market_id || '';
-  row.querySelector('[data-field="outcome"]').value = market.outcome || 'YES';
+  setOutcomeOptions(row, market.outcomes || ['YES', 'NO'], market.outcome || 'YES');
   row.querySelector('[data-field="quote_size"]').value = market.quote_size || '1.0';
   row.querySelector('.remove-market').addEventListener('click', () => {
     if (marketsList.children.length === 1) return;
@@ -71,17 +85,28 @@ function renderMarketLookup(row, result) {
   message.textContent = result.message;
   container.append(message);
   (result.matches || []).forEach((market) => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'market-match';
-    button.textContent = `${market.question} · ID ${market.id}${market.trading_status ? ` · ${market.trading_status}` : ''}`;
-    button.addEventListener('click', () => {
-      row.querySelector('[data-field="market_id"]').value = market.id;
-      container.hidden = true;
-      formDirty = true;
-      showNotice(`已填入 Market ID：${market.id}`);
+    const group = document.createElement('div');
+    group.className = 'market-match-group';
+    const title = document.createElement('p');
+    const category = market.category_title ? `${market.category_title} · ` : '';
+    title.textContent = `${category}${market.question} · ID ${market.id}${market.trading_status ? ` · ${market.trading_status}` : ''}`;
+    group.append(title);
+    const outcomes = market.outcomes?.length ? market.outcomes : ['YES', 'NO'];
+    outcomes.forEach((outcome) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'market-match';
+      button.textContent = `选择「${outcome}」挂单`;
+      button.addEventListener('click', () => {
+        row.querySelector('[data-field="market_id"]').value = market.id;
+        setOutcomeOptions(row, outcomes, outcome);
+        container.hidden = true;
+        formDirty = true;
+        showNotice(`已选择 ${market.question} · ${outcome}（Market ID：${market.id}）`);
+      });
+      group.append(button);
     });
-    container.append(button);
+    container.append(group);
   });
 }
 

@@ -38,7 +38,6 @@ class SetupPayload(BaseModel):
     market_id: str = Field(min_length=1, max_length=200)
     outcome: Literal["YES", "NO"] = "YES"
     token_id: str = ""
-    fee_rate_bps: str = "0"
     quote_size: str = "1.0"
     cancel_after_seconds: str = "8"
     max_position_per_market: str = "10.0"
@@ -193,7 +192,6 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
             market_id=payload.market_id.strip(),
             outcome=payload.outcome,
             token_id=payload.token_id.strip(),
-            fee_rate_bps=payload.fee_rate_bps.strip(),
             quote_size=payload.quote_size.strip(),
             cancel_after_seconds=payload.cancel_after_seconds.strip(),
             max_position_per_market=payload.max_position_per_market.strip(),
@@ -230,8 +228,6 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
 
 def _validate_setup(payload: SetupPayload) -> None:
     try:
-        if int(payload.fee_rate_bps) < 0:
-            raise ValueError
         for value in (
             payload.quote_size,
             payload.cancel_after_seconds,
@@ -241,7 +237,7 @@ def _validate_setup(payload: SetupPayload) -> None:
             if Decimal(value) <= 0:
                 raise ValueError
     except (InvalidOperation, ValueError) as error:
-        raise HTTPException(status_code=422, detail="数量和费率必须是有效的正数。") from error
+        raise HTTPException(status_code=422, detail="数量必须是有效的正数。") from error
 
 
 def _apply_settings_to_process(answers: WizardAnswers) -> None:

@@ -20,11 +20,17 @@ from predict_mm.config import Settings, load_config
 from predict_mm.engine import MarketMakerEngine
 from predict_mm.logging import configure_logging
 from predict_mm.risk import RiskManager
-from predict_mm.setup_wizard import WizardAnswers, build_config_text, build_env_text
+from predict_mm.setup_wizard import MarketAnswers, WizardAnswers, build_config_text, build_env_text
 from predict_mm.strategy import PassiveMakerStrategy
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "web_static"
+
+
+class MarketPayload(BaseModel):
+    market_id: str = Field(min_length=1, max_length=200)
+    outcome: Literal["YES", "NO"] = "YES"
+    quote_size: str = "1.0"
 
 
 class SetupPayload(BaseModel):
@@ -35,10 +41,7 @@ class SetupPayload(BaseModel):
     predict_account_address: str = ""
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     dry_run: bool = True
-    market_id: str = Field(min_length=1, max_length=200)
-    outcome: Literal["YES", "NO"] = "YES"
-    token_id: str = ""
-    quote_size: str = "1.0"
+    markets: list[MarketPayload] = Field(min_length=1, max_length=50)
     cancel_after_seconds: str = "8"
     max_position_per_market: str = "10.0"
     max_total_position: str = "50.0"
@@ -83,15 +86,20 @@ class DashboardState:
         if self.configured():
             config = load_config(self.config_path)
         settings = Settings.from_env()
-        market = config.enabled_markets[0] if config and config.enabled_markets else None
+        markets = config.enabled_markets if config else []
         return {
             "configured": self.configured(),
             "running": self.running,
             "last_error": self.last_error,
             "dry_run": config.dry_run if config else True,
-            "market_id": market.id if market else "",
-            "outcome": market.outcome if market else "YES",
-            "quote_size": str(config.strategy.quote_size) if config else "1.0",
+            "markets": [
+                {
+                    "market_id": market.id,
+                    "outcome": market.outcome,
+                    "quote_size": str(market.quote_size or config.strategy.quote_size),
+                }
+                for market in markets
+            ],
             "max_position_per_market": str(config.risk.max_position_per_market) if config else "10.0",
             "max_total_position": str(config.risk.max_total_position) if config else "50.0",
             "cancel_after_seconds": config.cancel_after_seconds if config else 8,
@@ -179,6 +187,15 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
             raise HTTPException(status_code=409, detail="请先停止机器人，再修改配置。")
         _validate_setup(payload)
         current = Settings.from_env()
+        market_answers = [
+            MarketAnswers(
+                market_id=market.market_id.strip(),
+                outcome=market.outcome,
+                quote_size=market.quote_size.strip(),
+            )
+            for market in payload.markets
+        ]
+        max_quote_size = max(Decimal(market.quote_size) for market in market_answers)
         answers = WizardAnswers(
             api_base_url=payload.api_base_url.strip() or "https://api.predict.fun",
             api_key=payload.api_key.strip() or current.api_key or "",
@@ -189,16 +206,15 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
             or "",
             log_level=payload.log_level,
             dry_run=payload.dry_run,
-            market_id=payload.market_id.strip(),
-            outcome=payload.outcome,
-            token_id=payload.token_id.strip(),
-            quote_size=payload.quote_size.strip(),
+            market_id=market_answers[0].market_id,
+            outcome=market_answers[0].outcome,
+            quote_size=str(max_quote_size),
             cancel_after_seconds=payload.cancel_after_seconds.strip(),
             max_position_per_market=payload.max_position_per_market.strip(),
             max_total_position=payload.max_total_position.strip(),
         )
         state.env_path.write_text(build_env_text(answers), encoding="utf-8")
-        state.config_path.write_text(build_config_text(answers), encoding="utf-8")
+        state.config_path.write_text(build_config_text(answers, markets=market_answers), encoding="utf-8")
         _apply_settings_to_process(answers)
         return {"ok": True, "message": "配置已保存。"}
 
@@ -221,7 +237,7 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
             await state.cancel_all()
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
-        return {"ok": True, "message": "已请求撤销当前市场的订单。"}
+        return {"ok": True, "message": "已请求撤销所有已配置市场的订单。"}
 
     return app
 
@@ -229,12 +245,14 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
 def _validate_setup(payload: SetupPayload) -> None:
     try:
         for value in (
-            payload.quote_size,
             payload.cancel_after_seconds,
             payload.max_position_per_market,
             payload.max_total_position,
         ):
             if Decimal(value) <= 0:
+                raise ValueError
+        for market in payload.markets:
+            if not market.market_id.strip() or Decimal(market.quote_size) <= 0:
                 raise ValueError
     except (InvalidOperation, ValueError) as error:
         raise HTTPException(status_code=422, detail="数量必须是有效的正数。") from error

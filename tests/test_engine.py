@@ -1,9 +1,11 @@
+/opt/homebrew/Library/Homebrew/cmd/shellenv.sh: line 9: /bin/ps: Operation not permitted
 import asyncio
 from decimal import Decimal
+from time import monotonic
 
 from predict_mm.config import BotConfig, MarketConfig, RiskConfig, StrategyConfig
 from predict_mm.engine import MarketMakerEngine
-from predict_mm.models import ManagedOrder, Quote, Side, WalletFillEvent
+from predict_mm.models import Level, ManagedOrder, OrderBook, Quote, Side, WalletFillEvent
 from predict_mm.risk import RiskManager
 from predict_mm.strategy import PassiveMakerStrategy
 
@@ -82,3 +84,72 @@ def test_active_order_markets_summarizes_open_orders() -> None:
             "emergency_exit_orders": 0,
         }
     ]
+
+
+class RepriceClient:
+    def __init__(self) -> None:
+        self.cancelled: list[str] = []
+        self.created: list[Quote] = []
+
+    async def get_positions(self) -> dict[str, Decimal]:
+        return {}
+
+    async def get_orderbook(self, market_id: str) -> OrderBook:
+        return OrderBook(
+            market_id=market_id,
+            bids=[Level(Decimal("0.49"), Decimal("100"))],
+            asks=[Level(Decimal("0.55"), Decimal("100"))],
+            tick_size=Decimal("0.01"),
+        )
+
+    async def cancel_order(self, order_id: str) -> None:
+        self.cancelled.append(order_id)
+
+    async def create_order(self, quote: Quote, *, post_only: bool = True) -> ManagedOrder:
+        self.created.append(quote)
+        return ManagedOrder(order_id=f"new-{len(self.created)}", quote=quote, created_at=monotonic())
+
+
+def test_approached_buy_quote_is_canceled_and_repriced_in_same_tick() -> None:
+    client = RepriceClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig(min_edge_ticks=2)),
+        risk=RiskManager(RiskConfig()),
+    )
+    engine.open_orders["old-buy"] = ManagedOrder(
+        order_id="old-buy",
+        quote=Quote("market-1", Side.BUY, Decimal("0.48"), Decimal("1")),
+        created_at=monotonic(),
+    )
+
+    asyncio.run(engine._tick())
+
+    assert client.cancelled == ["old-buy"]
+    assert [quote.price for quote in client.created] == [Decimal("0.47"), Decimal("0.57")]
+
+
+def test_approached_sell_quote_is_canceled() -> None:
+    client = RepriceClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+    engine.open_orders["old-sell"] = ManagedOrder(
+        order_id="old-sell",
+        quote=Quote("market-1", Side.SELL, Decimal("0.57"), Decimal("1")),
+        created_at=monotonic(),
+    )
+    book = OrderBook(
+        market_id="market-1",
+        bids=[Level(Decimal("0.49"), Decimal("100"))],
+        asks=[Level(Decimal("0.56"), Decimal("100"))],
+        tick_size=Decimal("0.01"),
+    )
+
+    asyncio.run(engine._cancel_orders_approached_by_market("market-1", book))
+
+    assert client.cancelled == ["old-sell"]

@@ -15,6 +15,7 @@ def test_build_env_text_does_not_include_api_secret() -> None:
     assert "PREDICT_JWT_TOKEN=jwt" in text
     assert "PREDICT_PRIVATE_KEY=private-key" in text
     assert "PREDICT_API_SECRET" not in text
+    assert "PREDICT_CHAIN_ID" not in text
 
 
 def test_build_config_text_defaults_to_dry_run() -> None:
@@ -27,3 +28,4 @@ def test_build_config_text_defaults_to_dry_run() -> None:
     assert "cancel_after_seconds = 8" in text
     assert "is_neg_risk" not in text
     assert "is_yield_bearing" not in text
+/opt/homebrew/Library/Homebrew/cmd/shellenv.sh: line 9: /bin/ps: Operation not permitted

@@ -129,7 +129,18 @@ class MarketMakerEngine:
                 continue
 
             active = [order for order in self.open_orders.values() if order.status == OrderStatus.OPEN]
-            approved = self.risk.filter_quotes(quotes, active, positions)
+            missing_quotes = [
+                quote
+                for quote in quotes
+                if not any(
+                    order.quote.market_id == quote.market_id
+                    and order.quote.side == quote.side
+                    and order.quote.outcome.strip().casefold() == quote.outcome.strip().casefold()
+                    and not order.is_emergency_exit
+                    for order in active
+                )
+            ]
+            approved = self.risk.filter_quotes(missing_quotes, active, positions)
             for quote in approved:
                 order = await self.client.create_order(quote)
                 self.open_orders[order.order_id] = order

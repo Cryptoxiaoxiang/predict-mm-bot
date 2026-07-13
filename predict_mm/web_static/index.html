@@ -53,7 +53,7 @@
             <label>单次挂单数量<input name="quote_size" inputmode="decimal" value="1.0" required /></label>
             <label>单市场最大仓位<input name="max_position_per_market" inputmode="decimal" value="10.0" required /></label>
             <label>总最大仓位<input name="max_total_position" inputmode="decimal" value="50.0" required /></label>
-            <label>撤单等待秒数<input name="cancel_after_seconds" inputmode="decimal" value="8" required /></label>
+            <label><span class="label-with-help">撤单等待秒数 <span class="tooltip" tabindex="0" aria-label="查看撤单等待秒数说明">?<span class="tooltip-text" role="tooltip">每笔挂单最多保留多久。到达这个时间后，机器人会撤单并根据最新盘口重新报价。首次建议保持 8 秒。</span></span></span><input name="cancel_after_seconds" inputmode="decimal" value="8" required /></label>
           </div>
 
           <label class="switch"><input type="checkbox" name="dry_run" checked /><span>使用模拟运行（不会真实下单）</span></label>

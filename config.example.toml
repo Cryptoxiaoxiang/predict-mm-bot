@@ -1,10 +1,10 @@
-dry_run = true
+dry_run = false
 poll_interval_seconds = 2.0
 cancel_after_seconds = 8.0
 replace_on_orderbook_change = true
 cancel_all_on_start = true
 cancel_all_on_shutdown = true
-emergency_exit_on_buy_fill = false
+emergency_exit_on_buy_fill = true
 
 [[markets]]
 id = "example-market-id"

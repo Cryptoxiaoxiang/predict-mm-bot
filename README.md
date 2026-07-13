@@ -32,31 +32,61 @@ python3 --version
 
 如果最后显示的版本低于 3.11，请改用 Ubuntu 24.04 服务器，或先将服务器的 Python 升级到 3.11 以上再继续。
 
-## 首次使用
+## 在服务器上部署网页控制台（推荐）
 
-在项目目录中依次运行：
+登录服务器后，先下载项目并进入目录：
+
+```bash
+git clone https://github.com/Cryptoxiaoxiang/predict-mm-bot.git
+cd predict-mm-bot
+```
+
+安装依赖并启动网页控制台：
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
-python -m predict_mm.main --config config.toml
+python -m predict_mm.web
 ```
 
-第一次启动会自动打开中文配置向导。按提示填写后，机器人会生成两个只保存在你电脑上的配置文件：
+在同一台电脑的浏览器打开：
+
+```text
+http://127.0.0.1:8080
+```
+
+第一次打开网页时，先填写 Market ID、交易方向和风险限制，再点“保存配置”。网页会生成两个只保存在服务器上的配置文件：
 
 - `.env`：账户和登录信息；
 - `config.toml`：市场、挂单数量与风险限制。
 
-默认会启用 `dry_run`（模拟运行）。完成向导后，程序会以模拟模式启动；按 `Ctrl+C` 可安全停止。
+默认会启用 `dry_run`（模拟运行）。保存后可在网页上点“启动机器人”；点“停止并撤单”可安全停止。
 
-如果只想重新填写配置、不立即启动机器人，请运行：
+如果网页运行在远程服务器上，网页不会直接暴露到公网。请在自己的电脑终端建立 SSH 隧道：
 
 ```bash
-python -m predict_mm.main --setup --config config.toml
+ssh -L 8080:127.0.0.1:8080 用户名@服务器IP
 ```
 
-## 配置向导怎么填
+然后在自己电脑浏览器打开 `http://127.0.0.1:8080`。
+
+如果希望退出 SSH 后网页仍持续运行：
+
+```bash
+mkdir -p logs
+nohup .venv/bin/python -m predict_mm.web > logs/web-console.log 2>&1 &
+```
+
+## 命令行方式
+
+不使用网页时，仍可通过命令行首次配置并直接启动：
+
+```bash
+python -m predict_mm.main --config config.toml
+```
+
+## 网页配置怎么填
 
 第一次测试时，推荐这样填写：
 
@@ -106,11 +136,14 @@ python -m predict_mm.main --setup --config config.toml
 
 ## 长时间运行（Docker）
 
-在电脑上完成首次配置向导后，可以用 Docker 长时间运行：
+Docker 会启动网页控制台。首次使用时，在项目目录中先创建空配置文件：
 
 ```bash
+touch .env config.toml
 docker compose up -d --build
 ```
+
+再通过上面的 SSH 隧道在浏览器打开控制台，完成配置并启动机器人。
 
 查看运行日志：
 

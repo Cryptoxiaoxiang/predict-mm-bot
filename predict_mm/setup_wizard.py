@@ -14,6 +14,7 @@ class WizardAnswers:
     predict_account_address: str = ""
     log_level: str = "INFO"
     dry_run: bool = True
+    emergency_exit_on_buy_fill: bool = False
     market_id: str = ""
     outcome: str = "YES"
     token_id: str = ""
@@ -46,6 +47,7 @@ def run_setup_wizard(config_path: str | Path = "config.toml", env_path: str | Pa
         predict_account_address=_ask("Predict Account Address，可先留空", ""),
         log_level=_ask("日志级别", "INFO").upper(),
         dry_run=_ask_bool("是否先使用 dry-run 模拟运行？强烈建议选 yes", True),
+        emergency_exit_on_buy_fill=_ask_bool("买单成交后是否以 0.01 紧急卖出？风险极高", False),
         market_id=_ask_required("要运行的 Market ID"),
         outcome=_ask_choice("交易 outcome", "YES", {"YES", "NO"}),
         token_id=_ask("Outcome token_id，实盘建议填写；留空则运行时尝试自动获取", ""),
@@ -103,6 +105,7 @@ cancel_after_seconds = {answers.cancel_after_seconds}
 replace_on_orderbook_change = true
 cancel_all_on_start = true
 cancel_all_on_shutdown = true
+emergency_exit_on_buy_fill = {_toml_bool(answers.emergency_exit_on_buy_fill)}
 
 {markets_text}
 

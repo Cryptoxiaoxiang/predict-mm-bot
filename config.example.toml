@@ -4,6 +4,7 @@ cancel_after_seconds = 8.0
 replace_on_orderbook_change = true
 cancel_all_on_start = true
 cancel_all_on_shutdown = true
+emergency_exit_on_buy_fill = false
 
 [[markets]]
 id = "example-market-id"

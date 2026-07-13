@@ -103,18 +103,3 @@ is_yield_bearing = false
 5. 手动检查交易所页面上的开放订单。
 
 另外，Predict.fun 的 `POST /v1/orders/remove` 是从订单簿快速移除订单，不等同于链上取消订单。官方文档提醒：如果需要彻底链上取消，还应使用官方 SDK 的链上 cancel 方法。
-
-## 项目结构
-
-```text
-predict_mm/
-  main.py          # 入口
-  config.py        # 配置加载
-  models.py        # 数据结构
-  client.py        # Predict.fun API 适配层
-  strategy.py      # 报价策略
-  risk.py          # 风控
-  engine.py        # 主循环
-  logging.py       # 日志
-tests/
-```

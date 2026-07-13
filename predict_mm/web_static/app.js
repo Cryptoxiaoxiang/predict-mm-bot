@@ -1,4 +1,3 @@
-/opt/homebrew/Library/Homebrew/cmd/shellenv.sh: line 9: /bin/ps: Operation not permitted
 const form = document.querySelector('#setup-form');
 const accountForm = document.querySelector('#account-form');
 const notice = document.querySelector('#notice');
@@ -33,7 +32,8 @@ function renumberMarkets() {
 
 function addMarket(market = {}) {
   const row = marketTemplate.content.firstElementChild.cloneNode(true);
-  row.querySelector('[data-field="market_id"]').value = market.market_id || '';
+  const marketIdInput = row.querySelector('[data-field="market_id"]');
+  marketIdInput.value = market.market_id || '';
   row.querySelector('[data-field="outcome"]').value = market.outcome || 'YES';
   row.querySelector('[data-field="quote_size"]').value = market.quote_size || '1.0';
   row.querySelector('.remove-market').addEventListener('click', () => {
@@ -42,8 +42,64 @@ function addMarket(market = {}) {
     renumberMarkets();
     formDirty = true;
   });
+  const resolveButton = row.querySelector('.resolve-market');
+  resolveButton.addEventListener('click', () => resolveMarketUrl(row));
+  marketIdInput.addEventListener('change', () => {
+    if (marketIdInput.value.includes('predict.fun/market/')) resolveMarketUrl(row);
+  });
   marketsList.append(row);
   renumberMarkets();
+}
+
+function renderMarketLookup(row, result) {
+  const container = row.querySelector('[data-field="market_lookup"]');
+  container.replaceChildren();
+  container.hidden = false;
+  const message = document.createElement('p');
+  message.textContent = result.message;
+  container.append(message);
+  (result.matches || []).forEach((market) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'market-match';
+    button.textContent = `${market.question} · ID ${market.id}${market.trading_status ? ` · ${market.trading_status}` : ''}`;
+    button.addEventListener('click', () => {
+      row.querySelector('[data-field="market_id"]').value = market.id;
+      container.hidden = true;
+      formDirty = true;
+      showNotice(`已填入 Market ID：${market.id}`);
+    });
+    container.append(button);
+  });
+}
+
+async function resolveMarketUrl(row) {
+  const input = row.querySelector('[data-field="market_id"]');
+  const value = input.value.trim();
+  if (!value.includes('predict.fun/market/')) {
+    showNotice('请先粘贴完整的 Predict.fun 市场网址。数字 Market ID 无需识别。', 'error');
+    return;
+  }
+  const button = row.querySelector('.resolve-market');
+  button.disabled = true;
+  button.textContent = '识别中…';
+  try {
+    const result = await request('/api/resolve-market', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({market_url: value}),
+    });
+    if (result.market_id) {
+      input.value = result.market_id;
+      formDirty = true;
+      showNotice(result.message);
+    } else {
+      renderMarketLookup(row, result);
+    }
+  } catch (error) {
+    showNotice(error.message, 'error');
+  } finally {
+    button.disabled = false;
+    button.textContent = '识别网址';
+  }
 }
 
 function renderMarkets(markets = []) {

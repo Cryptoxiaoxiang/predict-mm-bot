@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict, is_dataclass, replace
+import html
 import json
 import logging
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -84,6 +86,10 @@ class PredictClient:
             for market in self._market_items(category.get("markets")):
                 add_market(market, category)
         return results
+
+    async def markets_from_public_page(self, market_url: str, slug: str) -> list[dict]:
+        """Read the rendered public category page when API search is unavailable."""
+        return await asyncio.to_thread(self._markets_from_public_page_sync, market_url, slug)
 
     async def create_eoa_jwt(self, private_key: str) -> str:
         """Create a wallet JWT by signing Predict's current auth message locally."""
@@ -307,6 +313,82 @@ class PredictClient:
         with urllib.request.urlopen(request, timeout=10) as response:
             raw = response.read()
         return json.loads(raw.decode("utf-8")) if raw else {}
+
+    def _markets_from_public_page_sync(self, market_url: str, slug: str) -> list[dict]:
+        request = urllib.request.Request(
+            market_url,
+            headers={
+                "Accept": "text/html",
+                "User-Agent": "Mozilla/5.0 (compatible; PredictMMBot/1.0)",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=15) as response:
+            markup = response.read().decode("utf-8", errors="replace")
+        return self._public_category_markets_from_html(markup, slug)
+
+    def _public_category_markets_from_html(self, markup: str, slug: str) -> list[dict]:
+        """Extract the category payload embedded in Predict.fun Next.js page data."""
+        slug_pattern = re.escape(slug)
+        category_start = re.compile(
+            rf'\{{"id":"[^"]+","slug":"{slug_pattern}"(?:,|\}})'
+        )
+        script_string = re.compile(r'self\.__next_f\.push\(\[1,("(?:\\.|[^"\\])*")\]\)')
+        decoder = json.JSONDecoder()
+        for script in script_string.findall(html.unescape(markup)):
+            try:
+                payload = json.loads(script)
+            except json.JSONDecodeError:
+                continue
+            query_markets = self._markets_from_next_query_payload(payload, slug, decoder)
+            if query_markets:
+                return query_markets
+            for match in category_start.finditer(payload):
+                try:
+                    category, _ = decoder.raw_decode(payload[match.start() :])
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(category, dict) or category.get("slug") != slug:
+                    continue
+                markets = self._market_items(category.get("markets"))
+                if not markets:
+                    continue
+                title = str(category.get("title") or "")
+                return [
+                    {**market, "categoryTitle": title, "categorySlug": slug}
+                    for market in markets
+                ]
+        return []
+
+    def _markets_from_next_query_payload(
+        self, payload: str, slug: str, decoder: json.JSONDecoder
+    ) -> list[dict]:
+        """Read individual market query results hydrated by a category page."""
+        results: list[dict] = []
+        seen_ids: set[str] = set()
+        for match in re.finditer(r'\{\s*"id"\s*:\s*"[^"]+"', payload):
+            try:
+                market, _ = decoder.raw_decode(payload[match.start() :])
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(market, dict) or not market.get("outcomes"):
+                continue
+            category = market.get("category")
+            if not isinstance(category, dict):
+                continue
+            if str(category.get("id") or category.get("slug") or "") != slug:
+                continue
+            market_id = str(market.get("id") or "")
+            if not market_id or market_id in seen_ids:
+                continue
+            results.append(
+                {
+                    **market,
+                    "categoryTitle": str(category.get("title") or ""),
+                    "categorySlug": slug,
+                }
+            )
+            seen_ids.add(market_id)
+        return results
 
     @staticmethod
     def _sign_eoa_auth_message(private_key: str, message: str) -> tuple[str, str]:

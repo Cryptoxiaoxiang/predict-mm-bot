@@ -14,6 +14,38 @@ def test_headers_match_predict_docs() -> None:
     assert client._headers()["Authorization"] == "Bearer jwt"
 
 
+def test_dry_run_log_describes_passive_yes_sell_as_no_buy(caplog) -> None:
+    client = PredictClient(Settings(), dry_run=True)
+    quote = Quote(
+        market_id="749916",
+        side=Side.SELL,
+        price=Decimal("0.509"),
+        size=Decimal("1.0"),
+        outcome="Yes",
+    )
+
+    with caplog.at_level("INFO", logger="predict-mm"):
+        asyncio.run(client.create_order(quote))
+
+    assert "DRY-RUN create buy 1.0 No @ 0.509 on 749916" in caplog.text
+
+
+def test_dry_run_log_keeps_emergency_exit_as_sell(caplog) -> None:
+    client = PredictClient(Settings(), dry_run=True)
+    quote = Quote(
+        market_id="749916",
+        side=Side.SELL,
+        price=Decimal("0.01"),
+        size=Decimal("1.0"),
+        outcome="Yes",
+    )
+
+    with caplog.at_level("INFO", logger="predict-mm"):
+        asyncio.run(client.create_order(quote, post_only=False))
+
+    assert "DRY-RUN create emergency sell 1.0 Yes @ 0.01 on 749916" in caplog.text
+
+
 def test_parse_orderbook_unwraps_predict_data() -> None:
     client = PredictClient(Settings(), dry_run=True)
 

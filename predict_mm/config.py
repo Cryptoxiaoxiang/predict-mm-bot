@@ -64,13 +64,13 @@ class MarketConfig:
 
 @dataclass(frozen=True)
 class BotConfig:
-    dry_run: bool = True
+    dry_run: bool = False
     poll_interval_seconds: float = 2
     cancel_after_seconds: float = 8
     replace_on_orderbook_change: bool = True
     cancel_all_on_start: bool = True
     cancel_all_on_shutdown: bool = True
-    emergency_exit_on_buy_fill: bool = False
+    emergency_exit_on_buy_fill: bool = True
     strategy: StrategyConfig = field(default_factory=StrategyConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
     markets: list[MarketConfig] = field(default_factory=list)
@@ -86,13 +86,13 @@ def load_config(path: str | Path) -> BotConfig:
 
     markets = [_market(market) for market in raw.get("markets", [])]
     config = BotConfig(
-        dry_run=bool(raw.get("dry_run", True)),
+        dry_run=bool(raw.get("dry_run", False)),
         poll_interval_seconds=float(raw.get("poll_interval_seconds", 2)),
         cancel_after_seconds=float(raw.get("cancel_after_seconds", 8)),
         replace_on_orderbook_change=bool(raw.get("replace_on_orderbook_change", True)),
         cancel_all_on_start=bool(raw.get("cancel_all_on_start", True)),
         cancel_all_on_shutdown=bool(raw.get("cancel_all_on_shutdown", True)),
-        emergency_exit_on_buy_fill=bool(raw.get("emergency_exit_on_buy_fill", False)),
+        emergency_exit_on_buy_fill=bool(raw.get("emergency_exit_on_buy_fill", True)),
         strategy=_strategy(raw.get("strategy", {})),
         risk=_risk(raw.get("risk", {})),
         markets=markets,

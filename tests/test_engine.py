@@ -53,3 +53,32 @@ def test_buy_fill_cancels_market_and_creates_emergency_sell() -> None:
     assert quote.price == Decimal("0.01")
     assert quote.size == Decimal("2")
     assert post_only is False
+
+
+def test_active_order_markets_summarizes_open_orders() -> None:
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        client=EmergencyClient(),  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+    engine.open_orders["buy"] = ManagedOrder(
+        order_id="buy",
+        quote=Quote("market-1", Side.BUY, Decimal("0.50"), Decimal("1")),
+        created_at=0,
+    )
+    engine.open_orders["sell"] = ManagedOrder(
+        order_id="sell",
+        quote=Quote("market-1", Side.SELL, Decimal("0.60"), Decimal("1")),
+        created_at=0,
+    )
+
+    assert engine.active_order_markets() == [
+        {
+            "market_id": "market-1",
+            "outcome": "YES",
+            "buy_orders": 1,
+            "sell_orders": 1,
+            "emergency_exit_orders": 0,
+        }
+    ]

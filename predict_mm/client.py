@@ -63,6 +63,27 @@ class PredictClient:
         markets = data.get("markets", [])
         return [market for market in markets if isinstance(market, dict)] if isinstance(markets, list) else []
 
+    async def create_eoa_jwt(self, private_key: str) -> str:
+        """Create a wallet JWT by signing Predict's current auth message locally."""
+        self._require_api_key()
+        auth_message_response = await self._request("GET", "/v1/auth/message")
+        message = str(self._data(auth_message_response).get("message") or "")
+        if not message:
+            raise RuntimeError("Predict.fun did not return an authentication message.")
+        try:
+            signer, signature = await asyncio.to_thread(self._sign_eoa_auth_message, private_key, message)
+        except (TypeError, ValueError) as error:
+            raise RuntimeError("钱包 Private Key 无效，无法生成 JWT。") from error
+        response = await self._request(
+            "POST",
+            "/v1/auth",
+            {"signer": signer, "signature": signature, "message": message},
+        )
+        token = self._data(response).get("token")
+        if not token:
+            raise RuntimeError("Predict.fun 未返回 JWT Token。")
+        return str(token)
+
     async def get_positions(self) -> dict[str, Decimal]:
         if self.dry_run:
             return {}
@@ -264,6 +285,15 @@ class PredictClient:
         with urllib.request.urlopen(request, timeout=10) as response:
             raw = response.read()
         return json.loads(raw.decode("utf-8")) if raw else {}
+
+    @staticmethod
+    def _sign_eoa_auth_message(private_key: str, message: str) -> tuple[str, str]:
+        from eth_account import Account
+        from eth_account.messages import encode_defunct
+
+        account = Account.from_key(private_key)
+        signed_message = account.sign_message(encode_defunct(text=message))
+        return account.address, f"0x{signed_message.signature.hex()}"
 
     def _parse_orderbook(
         self,

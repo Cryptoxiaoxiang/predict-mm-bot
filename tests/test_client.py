@@ -73,6 +73,35 @@ def test_market_search_uses_official_search_endpoint() -> None:
     assert markets == [{"id": 123, "question": "Bitcoin?"}]
 
 
+def test_market_search_includes_markets_nested_under_categories() -> None:
+    class StubClient(PredictClient):
+        async def _request(self, method, path, payload=None, query=None):  # type: ignore[no-untyped-def]
+            return {
+                "data": {
+                    "markets": [{"id": 1, "title": "Direct"}],
+                    "categories": [
+                        {
+                            "slug": "fra-esp",
+                            "title": "France vs. Spain",
+                            "markets": [
+                                {
+                                    "id": 2,
+                                    "title": "Match winner",
+                                    "outcomes": [{"name": "FRA"}, {"name": "Draw"}, {"name": "ESP"}],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            }
+
+    client = StubClient(Settings(api_key="api-key"), dry_run=False)
+    markets = asyncio.run(client.search_markets("fra-esp"))
+
+    assert [market["id"] for market in markets] == [1, 2]
+    assert markets[1]["categoryTitle"] == "France vs. Spain"
+
+
 def test_eoa_jwt_signs_the_dynamic_message_locally() -> None:
     class StubClient(PredictClient):
         def __init__(self) -> None:

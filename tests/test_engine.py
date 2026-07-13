@@ -120,6 +120,28 @@ class RepriceClient:
         return ManagedOrder(order_id=f"new-{len(self.created)}", quote=quote, created_at=monotonic())
 
 
+def test_tick_only_adds_the_missing_dual_outcome_quote() -> None:
+    client = RepriceClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(
+            dry_run=True,
+            markets=[MarketConfig(id="market-1", outcome="YES_NO", quote_size=Decimal("1"))],
+        ),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig(max_open_orders_per_market=2)),
+    )
+    engine.open_orders["existing-yes"] = ManagedOrder(
+        order_id="existing-yes",
+        quote=Quote("market-1", Side.BUY, Decimal("0.45"), Decimal("1"), "Yes"),
+        created_at=monotonic(),
+    )
+
+    asyncio.run(engine._tick())
+
+    assert [(quote.side, quote.outcome) for quote in client.created] == [(Side.BUY, "No")]
+
+
 def test_approached_buy_quote_is_canceled_and_repriced_in_same_tick() -> None:
     client = RepriceClient()
     engine = MarketMakerEngine(
@@ -137,7 +159,7 @@ def test_approached_buy_quote_is_canceled_and_repriced_in_same_tick() -> None:
     asyncio.run(engine._tick())
 
     assert client.cancelled == ["old-buy"]
-    assert [quote.price for quote in client.created] == [Decimal("0.47"), Decimal("0.57")]
+    assert [quote.price for quote in client.created] == [Decimal("0.47")]
 
 
 def test_approached_sell_quote_is_canceled() -> None:

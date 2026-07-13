@@ -38,27 +38,23 @@ class PassiveMakerStrategy:
             return []
 
         quote_size = market.quote_size or self.config.quote_size
-        return [
-            Quote(
+
+        def buy(outcome: str, price: Decimal) -> Quote:
+            return Quote(
                 market_id=market.id,
                 side=Side.BUY,
-                price=bid,
+                price=price,
                 size=quote_size,
-                outcome=market.outcome,
+                outcome=outcome,
                 token_id=market.token_id,
                 fee_rate_bps=market.fee_rate_bps,
                 is_neg_risk=market.is_neg_risk,
                 is_yield_bearing=market.is_yield_bearing,
-            ),
-            Quote(
-                market_id=market.id,
-                side=Side.SELL,
-                price=ask,
-                size=quote_size,
-                outcome=market.outcome,
-                token_id=market.token_id,
-                fee_rate_bps=market.fee_rate_bps,
-                is_neg_risk=market.is_neg_risk,
-                is_yield_bearing=market.is_yield_bearing,
-            ),
-        ]
+            )
+
+        selected = market.outcome.strip().upper()
+        if selected in {"YES_NO", "YES&NO", "YES AND NO"}:
+            return [buy("Yes", bid), buy("No", ask)]
+        if selected == "NO":
+            return [buy(market.outcome, ask)]
+        return [buy(market.outcome, bid)]

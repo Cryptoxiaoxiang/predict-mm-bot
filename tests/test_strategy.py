@@ -1,3 +1,4 @@
+/opt/homebrew/Library/Homebrew/cmd/shellenv.sh: line 9: /bin/ps: Operation not permitted
 from decimal import Decimal
 
 from predict_mm.config import MarketConfig, StrategyConfig
@@ -33,6 +34,22 @@ def test_strategy_skips_tight_spread() -> None:
     )
 
     assert strategy.build_quotes(MarketConfig(id="m1"), book) == []
+
+
+def test_strategy_uses_market_tick_size() -> None:
+    strategy = PassiveMakerStrategy(
+        StrategyConfig(tick_size=Decimal("0.001"), quote_size=Decimal("1"), min_edge_ticks=2)
+    )
+    book = OrderBook(
+        market_id="m1",
+        bids=[Level(Decimal("0.50"), Decimal("100"))],
+        asks=[Level(Decimal("0.55"), Decimal("100"))],
+        tick_size=Decimal("0.01"),
+    )
+
+    quotes = strategy.build_quotes(MarketConfig(id="m1"), book)
+
+    assert [quote.price for quote in quotes] == [Decimal("0.48"), Decimal("0.57")]
 
 
 def test_strategy_uses_per_market_quote_size() -> None:

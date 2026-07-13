@@ -14,12 +14,30 @@
 
 模拟运行不需要填写钱包私钥，也不会发送真实订单。
 
+## 服务器准备（首次）
+
+建议选择 Ubuntu 24.04 服务器。登录服务器后，先检查 Python 是否已经安装：
+
+```bash
+python3 --version
+```
+
+显示 `Python 3.11` 或更高版本即可继续下一步。如果提示找不到命令，请安装 Python、虚拟环境工具和 Git：
+
+```bash
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip git
+python3 --version
+```
+
+如果最后显示的版本低于 3.11，请改用 Ubuntu 24.04 服务器，或先将服务器的 Python 升级到 3.11 以上再继续。
+
 ## 首次使用
 
 在项目目录中依次运行：
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 python -m predict_mm.main --config config.toml

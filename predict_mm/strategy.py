@@ -1,3 +1,4 @@
+/opt/homebrew/Library/Homebrew/cmd/shellenv.sh: line 9: /bin/ps: Operation not permitted
 from __future__ import annotations
 
 from decimal import Decimal
@@ -22,7 +23,8 @@ class PassiveMakerStrategy:
         if spread > self.config.max_spread_to_quote:
             return []
 
-        edge = self.config.tick_size * Decimal(self.config.min_edge_ticks)
+        tick_size = orderbook.tick_size or self.config.tick_size
+        edge = tick_size * Decimal(self.config.min_edge_ticks)
         if self.config.join_best_price:
             raw_bid = best_bid.price
             raw_ask = best_ask.price
@@ -30,8 +32,8 @@ class PassiveMakerStrategy:
             raw_bid = best_bid.price - edge
             raw_ask = best_ask.price + edge
 
-        bid = quantize_price(raw_bid, self.config.tick_size, Side.BUY)
-        ask = quantize_price(raw_ask, self.config.tick_size, Side.SELL)
+        bid = quantize_price(raw_bid, tick_size, Side.BUY)
+        ask = quantize_price(raw_ask, tick_size, Side.SELL)
 
         if bid <= Decimal("0") or ask >= Decimal("1") or bid >= ask:
             return []

@@ -1,3 +1,4 @@
+/opt/homebrew/Library/Homebrew/cmd/shellenv.sh: line 9: /bin/ps: Operation not permitted
 from decimal import Decimal
 import asyncio
 
@@ -29,6 +30,34 @@ def test_parse_orderbook_unwraps_predict_data() -> None:
     assert book.best_bid.price == Decimal("0.49")
     assert book.best_ask is not None
     assert book.best_ask.price == Decimal("0.51")
+
+
+def test_market_decimal_precision_sets_tick_size() -> None:
+    client = PredictClient(Settings(), dry_run=True)
+
+    assert client._tick_size_from_market({"decimalPrecision": 2}, "market-1") == Decimal("0.01")
+    assert client._tick_size_from_market({"decimalPrecision": 3}, "market-1") == Decimal("0.001")
+
+
+def test_orderbook_uses_cached_market_precision() -> None:
+    class StubClient(PredictClient):
+        def __init__(self) -> None:
+            super().__init__(Settings(api_key="api-key"), dry_run=False)
+            self.paths: list[str] = []
+
+        async def _request(self, method, path, payload=None, query=None):  # type: ignore[no-untyped-def]
+            self.paths.append(path)
+            if path == "/v1/markets/1":
+                return {"data": {"decimalPrecision": 2}}
+            return {"data": {"bids": [["0.50", "10"]], "asks": [["0.55", "10"]]}}
+
+    client = StubClient()
+    first = asyncio.run(client.get_orderbook("1"))
+    second = asyncio.run(client.get_orderbook("1"))
+
+    assert first.tick_size == Decimal("0.01")
+    assert second.tick_size == Decimal("0.01")
+    assert client.paths.count("/v1/markets/1") == 1
 
 
 def test_real_order_requires_sdk_inputs() -> None:

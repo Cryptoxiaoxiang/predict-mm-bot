@@ -1,4 +1,3 @@
-/opt/homebrew/Library/Homebrew/cmd/shellenv.sh: line 9: /bin/ps: Operation not permitted
 <!doctype html>
 <html lang="zh-CN">
   <head>
@@ -114,7 +113,7 @@
           <button class="text-button remove-market" type="button">移除</button>
         </div>
         <div class="form-grid">
-          <label>Market ID<input data-field="market_id" required placeholder="要运行的市场 ID" /></label>
+          <label class="market-id-field"><span class="label-with-help">市场网址 / Market ID <span class="tooltip" tabindex="0" aria-label="查看市场网址说明">?<span class="tooltip-text" role="tooltip">可直接粘贴 Predict.fun 市场页面的网址，例如 https://predict.fun/market/xxx；系统会自动查找并填入数字 Market ID。也可以直接输入数字 ID。</span></span></span><div class="market-id-input"><input data-field="market_id" required placeholder="粘贴 predict.fun 市场网址，或输入数字 ID" /><button class="secondary resolve-market" type="button">识别网址</button></div><div class="market-lookup-result" data-field="market_lookup" hidden></div></label>
           <label>交易方向<select data-field="outcome"><option>YES</option><option>NO</option></select></label>
           <label>单次挂单数量<input data-field="quote_size" inputmode="decimal" value="1.0" required /></label>
         </div>

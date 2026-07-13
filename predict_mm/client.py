@@ -36,6 +36,41 @@ class PredictClient:
     async def close(self) -> None:
         return None
 
+    async def get_usdt_balance(self) -> tuple[Decimal, str]:
+        """Read the configured trading account's on-chain USDT balance.
+
+        The official SDK needs the local signer to initialise its BNB-chain contract
+        client. This only performs a contract ``balanceOf`` call: it does not create,
+        sign, or submit an order or transaction.
+        """
+        if not self.settings.private_key:
+            raise RuntimeError("请先在账户设置中保存钱包 Private Key，才能读取余额。")
+        try:
+            from eth_account import Account
+            from predict_sdk import ChainId, OrderBuilder, OrderBuilderOptions  # type: ignore[import-not-found]
+        except ImportError as error:
+            raise RuntimeError("读取余额需要安装 Predict.fun 官方 SDK。") from error
+
+        account_address = self.settings.predict_account_address or Account.from_key(
+            self.settings.private_key
+        ).address
+        options = (
+            OrderBuilderOptions(predict_account=self.settings.predict_account_address)
+            if self.settings.predict_account_address
+            else None
+        )
+        try:
+            builder = await asyncio.to_thread(
+                OrderBuilder.make,
+                ChainId(self.settings.chain_id),
+                self.settings.private_key,
+                options,
+            )
+            balance_wei = await builder.balance_of_async("USDT", account_address)
+        except Exception as error:  # noqa: BLE001
+            raise RuntimeError("无法读取链上 USDT 余额，请检查钱包配置和服务器网络。") from error
+        return Decimal(str(balance_wei)) / Decimal(10**18), account_address
+
     def _headers(self) -> dict[str, str]:
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         if self.settings.api_key:

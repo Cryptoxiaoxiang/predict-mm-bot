@@ -40,8 +40,8 @@ class SetupPayload(BaseModel):
     private_key: str = ""
     predict_account_address: str = ""
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
-    dry_run: bool = True
-    emergency_exit_on_buy_fill: bool = False
+    dry_run: bool = False
+    emergency_exit_on_buy_fill: bool = True
     markets: list[MarketPayload] = Field(min_length=1, max_length=50)
     cancel_after_seconds: str = "8"
     max_position_per_market: str = "10.0"
@@ -92,7 +92,7 @@ class DashboardState:
             "configured": self.configured(),
             "running": self.running,
             "last_error": self.last_error,
-            "dry_run": config.dry_run if config else True,
+            "dry_run": config.dry_run if config else False,
             "markets": [
                 {
                     "market_id": market.id,
@@ -104,7 +104,7 @@ class DashboardState:
             "max_position_per_market": str(config.risk.max_position_per_market) if config else "10.0",
             "max_total_position": str(config.risk.max_total_position) if config else "50.0",
             "cancel_after_seconds": config.cancel_after_seconds if config else 8,
-            "emergency_exit_on_buy_fill": config.emergency_exit_on_buy_fill if config else False,
+            "emergency_exit_on_buy_fill": config.emergency_exit_on_buy_fill if config else True,
             "api_key_set": bool(settings.api_key),
             "jwt_token_set": bool(settings.jwt_token),
             "private_key_set": bool(settings.private_key),

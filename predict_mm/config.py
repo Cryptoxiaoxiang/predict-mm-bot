@@ -12,6 +12,9 @@ class Settings:
     api_base_url: str = "https://api.predict.fun"
     api_key: str | None = None
     jwt_token: str | None = None
+    private_key: str | None = None
+    predict_account_address: str | None = None
+    chain_id: int = 56
     log_level: str = "INFO"
 
     @classmethod
@@ -21,6 +24,9 @@ class Settings:
             api_base_url=os.getenv("PREDICT_API_BASE_URL", cls.api_base_url),
             api_key=os.getenv("PREDICT_API_KEY") or None,
             jwt_token=os.getenv("PREDICT_JWT_TOKEN") or None,
+            private_key=os.getenv("PREDICT_PRIVATE_KEY") or None,
+            predict_account_address=os.getenv("PREDICT_ACCOUNT_ADDRESS") or None,
+            chain_id=int(os.getenv("PREDICT_CHAIN_ID", str(cls.chain_id))),
             log_level=os.getenv("LOG_LEVEL", cls.log_level),
         )
 
@@ -49,6 +55,10 @@ class MarketConfig:
     id: str
     enabled: bool = True
     outcome: str = "YES"
+    token_id: str | None = None
+    fee_rate_bps: int | None = None
+    is_neg_risk: bool | None = None
+    is_yield_bearing: bool | None = None
 
 
 @dataclass(frozen=True)

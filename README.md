@@ -10,7 +10,7 @@
 
 - Predictfun 注册链接，可以获得10%手续费折扣: https://predict.fun?ref=5BA3F
 - 一台已安装 Python 3.11 或更高版本的电脑；
-- 想要运行的 Predict.fun 市场的 `Market ID`；
+- 想要运行的 Predict.fun 市场网址或 `Market ID`；
 - 只有准备真实交易时，才需要 Predict.fun API Key 和钱包私钥；网页会自动生成 JWT Token。
 
 模拟运行不需要填写钱包私钥，也不会发送真实订单。
@@ -128,15 +128,17 @@ python -m predict_mm.main --config config.toml
 
 - `API Key`：可暂时留空；
 - `钱包 Private Key`：使用 EOA 实盘时填写。保存账户设置时，网页会用它在本机/VPS 内存中签署官方动态 message，并自动获取 JWT；私钥不会发送给 Predict.fun 或写入日志；
-- `Predict Account Address`：留空；
+- `Predict Account Address`：只在使用 Predict.fun 的 Predict Account 智能钱包时填写其公开地址；仅使用 EOA 时留空；
 - `是否使用 dry-run 模拟运行`：默认不勾选；勾选后才不会真实下单。
 - `Market ID`：每个市场都必填，填入要运行的 Predict.fun 市场 ID；
-- `交易 outcome`：每个市场分别选择 `YES` 或 `NO`；
+- `挂单选项`：粘贴市场网址并点击“识别网址”后，网页会显示该市场实际可交易的选项；选择你要做市的一个选项，例如 `YES` / `NO`、`FRA` / `Draw` / `ESP`；
 - `单次挂单数量`：每个市场分别设置。首次建议使用很小的数字，例如 `1`；
 - `单市场最大仓位`、`总最大仓位`：所有市场共用的风险上限，首次可设为 `2`、`5`。
 - `买单被吃单后，立即以 0.01 紧急卖出`：默认勾选。买单被吃单（包括部分成交）时，机器人会撤掉该市场其余订单、停止继续报价，并以 `0.01` 的非 post-only 卖单卖出已成交数量。这可能会造成损失。
 
-`PREDICT_ACCOUNT_ADDRESS` 是公开的钱包/交易账户地址，不是私钥。只有真实挂单时才需要填写，并且必须与私钥对应。
+`PREDICT_ACCOUNT_ADDRESS` 是 Predict.fun 的 Predict Account 智能钱包公开地址，不是私钥，也不是 EOA 地址。只有使用该智能钱包实盘时才需要填写；只使用 EOA 时应留空。
+
+赛事等组合页面可能包含多个底层市场和多个可交易选项。识别后，请先选择具体市场，再选择其中一个选项；机器人会只对你选定的选项同时挂买单和卖单。
 
 ## 什么是模拟运行（dry-run）
 

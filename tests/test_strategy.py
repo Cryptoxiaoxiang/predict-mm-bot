@@ -1,4 +1,3 @@
-/opt/homebrew/Library/Homebrew/cmd/shellenv.sh: line 9: /bin/ps: Operation not permitted
 from decimal import Decimal
 
 from predict_mm.config import MarketConfig, StrategyConfig

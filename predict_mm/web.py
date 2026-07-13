@@ -9,7 +9,6 @@ from collections import deque
 from contextlib import asynccontextmanager
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Literal
 from urllib.parse import unquote, urlparse
 
 from fastapi import FastAPI, HTTPException
@@ -31,7 +30,7 @@ STATIC_DIR = BASE_DIR / "web_static"
 
 class MarketPayload(BaseModel):
     market_id: str = Field(min_length=1, max_length=200)
-    outcome: Literal["YES", "NO"] = "YES"
+    outcome: str = Field(default="YES", min_length=1, max_length=120)
     quote_size: str = "1.0"
 
 
@@ -291,9 +290,9 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
 
         client = PredictClient(settings=settings, dry_run=False)
         try:
-            markets = await client.search_markets(_search_query_from_slug(slug))
+            markets = await client.search_markets(slug)
             if not markets:
-                markets = await client.search_markets(slug)
+                markets = await client.search_markets(_search_query_from_slug(slug))
         except Exception as error:  # noqa: BLE001
             logging.getLogger("predict-mm").warning("无法从市场网址识别 ID: %s", error)
             raise HTTPException(
@@ -304,18 +303,11 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
             await client.close()
 
         matches = [_market_lookup_result(market) for market in markets]
-        if len(matches) == 1:
-            return {
-                "ok": True,
-                "market_id": matches[0]["id"],
-                "matches": matches,
-                "message": f"已识别 Market ID：{matches[0]['id']}。",
-            }
         return {
             "ok": True,
             "market_id": None,
             "matches": matches,
-            "message": "请选择与网页题目完全一致的市场。" if matches else "未找到匹配市场，请尝试直接填写数字 Market ID。",
+            "message": "请选择要挂单的市场和选项。" if matches else "未找到匹配市场，请尝试直接填写数字 Market ID。",
         }
 
     @app.post("/api/start")
@@ -358,7 +350,7 @@ def _validate_setup(payload: SetupPayload) -> None:
             if Decimal(value) <= 0:
                 raise ValueError
         for market in payload.markets:
-            if not market.market_id.strip() or Decimal(market.quote_size) <= 0:
+            if not market.market_id.strip() or not market.outcome.strip() or Decimal(market.quote_size) <= 0:
                 raise ValueError
     except (InvalidOperation, ValueError) as error:
         raise HTTPException(status_code=422, detail="数量必须是有效的正数。") from error
@@ -395,11 +387,20 @@ def _search_query_from_slug(slug: str) -> str:
 
 
 def _market_lookup_result(market: dict) -> dict[str, object]:
+    outcomes: list[str] = []
+    for outcome in market.get("outcomes") or []:
+        if not isinstance(outcome, dict):
+            continue
+        name = str(outcome.get("name") or outcome.get("outcome") or outcome.get("title") or "").strip()
+        if name and name not in outcomes:
+            outcomes.append(name)
     return {
         "id": str(market.get("id", "")),
         "title": str(market.get("title") or ""),
         "question": str(market.get("question") or market.get("title") or ""),
+        "category_title": str(market.get("categoryTitle") or ""),
         "trading_status": str(market.get("tradingStatus") or ""),
+        "outcomes": outcomes,
     }
 
 

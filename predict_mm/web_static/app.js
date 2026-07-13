@@ -78,6 +78,7 @@ async function refreshStatus() {
       setField('max_position_per_market', status.max_position_per_market);
       setField('max_total_position', status.max_total_position);
       form.elements.namedItem('dry_run').checked = status.dry_run;
+      form.elements.namedItem('emergency_exit_on_buy_fill').checked = status.emergency_exit_on_buy_fill;
     }
     document.querySelector('#secret-status').textContent = [
       status.api_key_set && 'API Key 已保存',
@@ -112,6 +113,7 @@ form.addEventListener('submit', async (event) => {
   const values = Object.fromEntries(new FormData(form));
   values.markets = collectMarkets();
   values.dry_run = form.elements.namedItem('dry_run').checked;
+  values.emergency_exit_on_buy_fill = form.elements.namedItem('emergency_exit_on_buy_fill').checked;
   values.api_base_url = 'https://api.predict.fun';
   try {
     const result = await request('/api/setup', {

@@ -43,6 +43,10 @@ class PassiveMakerStrategy:
                 price=bid,
                 size=self.config.quote_size,
                 outcome=market.outcome,
+                token_id=market.token_id,
+                fee_rate_bps=market.fee_rate_bps,
+                is_neg_risk=market.is_neg_risk,
+                is_yield_bearing=market.is_yield_bearing,
             ),
             Quote(
                 market_id=market.id,
@@ -50,6 +54,9 @@ class PassiveMakerStrategy:
                 price=ask,
                 size=self.config.quote_size,
                 outcome=market.outcome,
+                token_id=market.token_id,
+                fee_rate_bps=market.fee_rate_bps,
+                is_neg_risk=market.is_neg_risk,
+                is_yield_bearing=market.is_yield_bearing,
             ),
         ]
-

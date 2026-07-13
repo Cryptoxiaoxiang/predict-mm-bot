@@ -64,8 +64,8 @@
             <label><span class="label-with-help">撤单等待秒数 <span class="tooltip" tabindex="0" aria-label="查看撤单等待秒数说明">?<span class="tooltip-text" role="tooltip">每笔挂单最多保留多久。到达这个时间后，机器人会撤单并根据最新盘口重新报价。首次建议保持 8 秒。</span></span></span><input name="cancel_after_seconds" inputmode="decimal" value="8" required /></label>
           </div>
 
-          <label class="switch"><input type="checkbox" name="dry_run" checked /><span>使用模拟运行（不会真实下单）</span></label>
-          <label class="switch warning-switch"><input type="checkbox" name="emergency_exit_on_buy_fill" /><span class="label-with-help">买单被吃单后，立即以 0.01 紧急卖出 <span class="tooltip" tabindex="0" aria-label="查看紧急卖出说明">?<span class="tooltip-text" role="tooltip">实盘专用。买单被吃单（包括部分成交）时，机器人会撤掉该市场其他订单、停止继续报价，并以 0.01 的非 post-only 卖单卖出已成交数量。这可能会造成损失，仅在你明确接受此风险时开启。</span></span></span></label>
+          <label class="switch"><input type="checkbox" name="dry_run" /><span>使用模拟运行（不会真实下单）</span></label>
+          <label class="switch warning-switch"><input type="checkbox" name="emergency_exit_on_buy_fill" checked /><span class="label-with-help">买单被吃单后，立即以 0.01 紧急卖出 <span class="tooltip" tabindex="0" aria-label="查看紧急卖出说明">?<span class="tooltip-text" role="tooltip">实盘专用。买单被吃单（包括部分成交）时，机器人会撤掉该市场其他订单、停止继续报价，并以 0.01 的非 post-only 卖单卖出已成交数量。这可能会造成损失，仅在你明确接受此风险时开启。</span></span></span></label>
 
           <details>
             <summary>实盘和高级选项</summary>

@@ -2,6 +2,7 @@ const form = document.querySelector('#setup-form');
 const notice = document.querySelector('#notice');
 const marketsList = document.querySelector('#markets-list');
 const marketTemplate = document.querySelector('#market-template');
+const advancedCard = document.querySelector('.advanced-card');
 let formDirty = false;
 
 function showNotice(message, kind = 'success') {
@@ -57,6 +58,34 @@ function collectMarkets() {
   }));
 }
 
+function renderOpenOrders(markets = []) {
+  const list = document.querySelector('#open-orders-list');
+  const summary = document.querySelector('#open-orders-summary');
+  list.replaceChildren();
+  const total = markets.reduce((count, market) => count + market.buy_orders + market.sell_orders, 0);
+  summary.textContent = total ? `${markets.length} 个市场 · ${total} 笔挂单` : '暂无挂单';
+  if (!markets.length) {
+    const empty = document.createElement('p');
+    empty.className = 'empty-state';
+    empty.textContent = '机器人当前没有管理中的挂单。';
+    list.append(empty);
+    return;
+  }
+  markets.forEach((market) => {
+    const row = document.createElement('article');
+    row.className = 'open-order-row';
+    const name = document.createElement('strong');
+    name.textContent = `市场 ${market.market_id} · ${market.outcome}`;
+    const details = document.createElement('span');
+    const labels = [`买单 ${market.buy_orders} 笔`, `卖单 ${market.sell_orders} 笔`];
+    if (market.emergency_exit_orders) labels.push(`紧急卖单 ${market.emergency_exit_orders} 笔`);
+    details.textContent = labels.join(' · ');
+    if (market.emergency_exit_orders) details.className = 'emergency';
+    row.append(name, details);
+    list.append(row);
+  });
+}
+
 async function refreshStatus() {
   try {
     const status = await request('/api/status');
@@ -69,6 +98,7 @@ async function refreshStatus() {
     document.querySelector('#market-value').textContent = markets.length ? `${markets.length} 个市场` : '—';
     document.querySelector('#outcome-value').textContent = markets.length ? markets.map((market) => market.outcome).join(' / ') : '—';
     document.querySelector('#size-value').textContent = markets.length ? markets.map((market) => market.quote_size).join(' / ') : '—';
+    renderOpenOrders(status.open_order_markets || []);
     document.querySelector('#start-button').disabled = !status.configured || status.running;
     document.querySelector('#stop-button').disabled = !status.running;
     document.querySelector('#cancel-button').disabled = !status.configured;
@@ -108,6 +138,8 @@ document.querySelector('#add-market-button').addEventListener('click', () => {
 });
 form.addEventListener('input', () => { formDirty = true; });
 form.addEventListener('change', () => { formDirty = true; });
+advancedCard.addEventListener('input', () => { formDirty = true; });
+advancedCard.addEventListener('change', () => { formDirty = true; });
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   const values = Object.fromEntries(new FormData(form));

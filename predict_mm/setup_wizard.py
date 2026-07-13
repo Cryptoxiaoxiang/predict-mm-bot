@@ -17,7 +17,6 @@ class WizardAnswers:
     market_id: str = ""
     outcome: str = "YES"
     token_id: str = ""
-    fee_rate_bps: str = "0"
     quote_size: str = "1.0"
     cancel_after_seconds: str = "8"
     max_position_per_market: str = "10.0"
@@ -42,7 +41,6 @@ def run_setup_wizard(config_path: str | Path = "config.toml", env_path: str | Pa
         market_id=_ask_required("要运行的 Market ID"),
         outcome=_ask_choice("交易 outcome", "YES", {"YES", "NO"}),
         token_id=_ask("Outcome token_id，实盘建议填写；留空则运行时尝试自动获取", ""),
-        fee_rate_bps=_ask("fee_rate_bps", "0"),
         quote_size=_ask("单次挂单数量 quote_size", "1.0"),
         cancel_after_seconds=_ask("订单多少秒后撤单", "8"),
         max_position_per_market=_ask("单市场最大仓位", "10.0"),
@@ -85,7 +83,6 @@ id = "{_toml_escape(answers.market_id)}"
 enabled = true
 outcome = "{answers.outcome}"
 token_id = "{_toml_escape(answers.token_id)}"
-fee_rate_bps = {answers.fee_rate_bps}
 
 [strategy]
 tick_size = "0.001"

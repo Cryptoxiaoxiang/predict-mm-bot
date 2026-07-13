@@ -52,7 +52,7 @@ class PredictClient:
         return self._parse_orderbook(market_id, self._data(response), tick_size=tick_size)
 
     async def search_markets(self, query: str, *, limit: int = 10) -> list[dict]:
-        """Search public markets by a title/question keyword."""
+        """Search public markets and markets nested under matching categories."""
         self._require_api_key()
         response = await self._request(
             "GET",
@@ -60,8 +60,30 @@ class PredictClient:
             query={"query": query, "limit": max(1, min(limit, 20))},
         )
         data = self._data(response)
-        markets = data.get("markets", [])
-        return [market for market in markets if isinstance(market, dict)] if isinstance(markets, list) else []
+        results: list[dict] = []
+        seen_ids: set[str] = set()
+
+        def add_market(market: object, category: dict | None = None) -> None:
+            if not isinstance(market, dict):
+                return
+            market_id = str(market.get("id") or "")
+            if not market_id or market_id in seen_ids:
+                return
+            item = dict(market)
+            if category is not None:
+                item["categoryTitle"] = category.get("title") or ""
+                item["categorySlug"] = category.get("slug") or ""
+            results.append(item)
+            seen_ids.add(market_id)
+
+        for market in self._market_items(data.get("markets")):
+            add_market(market)
+        for category in data.get("categories") or []:
+            if not isinstance(category, dict):
+                continue
+            for market in self._market_items(category.get("markets")):
+                add_market(market, category)
+        return results
 
     async def create_eoa_jwt(self, private_key: str) -> str:
         """Create a wallet JWT by signing Predict's current auth message locally."""
@@ -491,6 +513,17 @@ class PredictClient:
                 rows = data.get(key)
                 if isinstance(rows, list):
                     return [row for row in rows if isinstance(row, dict)]
+        return []
+
+    def _market_items(self, value: object) -> list[dict]:
+        """Accept both REST arrays and GraphQL-style market edge collections."""
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        if not isinstance(value, dict):
+            return []
+        edges = value.get("edges")
+        if isinstance(edges, list):
+            return [edge["node"] for edge in edges if isinstance(edge, dict) and isinstance(edge.get("node"), dict)]
         return []
 
     def _outcome_name(self, outcome: object) -> str:

@@ -1,15 +1,16 @@
-/opt/homebrew/Library/Homebrew/cmd/shellenv.sh: line 9: /bin/ps: Operation not permitted
 from __future__ import annotations
 
 import argparse
 import asyncio
 import logging
 import os
+import re
 from collections import deque
 from contextlib import asynccontextmanager
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Literal
+from urllib.parse import unquote, urlparse
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -49,6 +50,10 @@ class AccountPayload(BaseModel):
     private_key: str = ""
     predict_account_address: str = ""
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+
+
+class MarketUrlPayload(BaseModel):
+    market_url: str = Field(min_length=1, max_length=1000)
 
 
 class MemoryLogHandler(logging.Handler):
@@ -245,6 +250,49 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
             message += " 机器人会在下次启动时使用新的账户设置。"
         return {"ok": True, "message": message}
 
+    @app.post("/api/resolve-market")
+    async def resolve_market(payload: MarketUrlPayload) -> dict[str, object]:
+        try:
+            slug = _market_slug_from_url(payload.market_url)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+        settings = Settings.from_env()
+        if not settings.api_key:
+            raise HTTPException(
+                status_code=400,
+                detail="请先在“账户设置”保存 API Key，才能从市场网址识别 Market ID。",
+            )
+
+        client = PredictClient(settings=settings, dry_run=False)
+        try:
+            markets = await client.search_markets(_search_query_from_slug(slug))
+            if not markets:
+                markets = await client.search_markets(slug)
+        except Exception as error:  # noqa: BLE001
+            logging.getLogger("predict-mm").warning("无法从市场网址识别 ID: %s", error)
+            raise HTTPException(
+                status_code=502,
+                detail="未能查询 Predict.fun 市场。请检查 API Key、网络后重试，或直接填写数字 Market ID。",
+            ) from error
+        finally:
+            await client.close()
+
+        matches = [_market_lookup_result(market) for market in markets]
+        if len(matches) == 1:
+            return {
+                "ok": True,
+                "market_id": matches[0]["id"],
+                "matches": matches,
+                "message": f"已识别 Market ID：{matches[0]['id']}。",
+            }
+        return {
+            "ok": True,
+            "market_id": None,
+            "matches": matches,
+            "message": "请选择与网页题目完全一致的市场。" if matches else "未找到匹配市场，请尝试直接填写数字 Market ID。",
+        }
+
     @app.post("/api/start")
     async def start() -> dict[str, object]:
         try:
@@ -270,6 +318,12 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
 
 
 def _validate_setup(payload: SetupPayload) -> None:
+    for market in payload.markets:
+        if "predict.fun/market/" in market.market_id.lower():
+            raise HTTPException(
+                status_code=422,
+                detail="请先点击“识别网址”并选择正确市场，再保存配置。",
+            )
     try:
         for value in (
             payload.cancel_after_seconds,
@@ -283,6 +337,37 @@ def _validate_setup(payload: SetupPayload) -> None:
                 raise ValueError
     except (InvalidOperation, ValueError) as error:
         raise HTTPException(status_code=422, detail="数量必须是有效的正数。") from error
+
+
+def _market_slug_from_url(value: str) -> str:
+    parsed = urlparse(value.strip())
+    host = (parsed.hostname or "").lower()
+    if host not in {"predict.fun", "www.predict.fun"}:
+        raise ValueError("请粘贴 predict.fun 的市场网址，例如 https://predict.fun/market/xxx")
+    parts = [unquote(part) for part in parsed.path.split("/") if part]
+    try:
+        position = parts.index("market")
+        slug = parts[position + 1].strip()
+    except (ValueError, IndexError) as error:
+        raise ValueError("网址中没有找到市场路径，请粘贴完整的 /market/… 链接。") from error
+    if not slug:
+        raise ValueError("网址中没有找到市场名称。")
+    return slug
+
+
+def _search_query_from_slug(slug: str) -> str:
+    without_timestamp = re.sub(r"[-_]\d{8,}$", "", slug)
+    query = re.sub(r"[-_]+", " ", without_timestamp).strip()
+    return query or slug
+
+
+def _market_lookup_result(market: dict) -> dict[str, object]:
+    return {
+        "id": str(market.get("id", "")),
+        "title": str(market.get("title") or ""),
+        "question": str(market.get("question") or market.get("title") or ""),
+        "trading_status": str(market.get("tradingStatus") or ""),
+    }
 
 
 def _apply_settings_to_process(answers: WizardAnswers) -> None:

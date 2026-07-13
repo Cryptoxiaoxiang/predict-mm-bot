@@ -12,8 +12,6 @@ outcome = "YES"
 # Recommended for real order creation. If omitted, the bot will try GET /v1/markets/{id}.
 token_id = ""
 fee_rate_bps = 0
-is_neg_risk = false
-is_yield_bearing = false
 
 [strategy]
 tick_size = "0.001"

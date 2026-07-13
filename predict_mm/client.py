@@ -1,4 +1,3 @@
-/opt/homebrew/Library/Homebrew/cmd/shellenv.sh: line 9: /bin/ps: Operation not permitted
 from __future__ import annotations
 
 import asyncio
@@ -51,6 +50,18 @@ class PredictClient:
         tick_size = self._tick_size_from_market(market, market_id)
         response = await self._request("GET", f"/v1/markets/{market_id}/orderbook")
         return self._parse_orderbook(market_id, self._data(response), tick_size=tick_size)
+
+    async def search_markets(self, query: str, *, limit: int = 10) -> list[dict]:
+        """Search public markets by a title/question keyword."""
+        self._require_api_key()
+        response = await self._request(
+            "GET",
+            "/v1/search",
+            query={"query": query, "limit": max(1, min(limit, 20))},
+        )
+        data = self._data(response)
+        markets = data.get("markets", [])
+        return [market for market in markets if isinstance(market, dict)] if isinstance(markets, list) else []
 
     async def get_positions(self) -> dict[str, Decimal]:
         if self.dry_run:

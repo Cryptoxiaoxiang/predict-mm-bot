@@ -27,12 +27,18 @@
 ## 快速开始
 
 ```bash
-cp .env.example .env
-cp config.example.toml config.toml
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .
 python -m predict_mm.main --config config.toml
+```
+
+第一次运行时，如果当前目录没有 `.env` 或 `config.toml`，程序会自动打开中文初始配置向导，逐步让你输入 API Key、JWT Token、Market ID、挂单数量和仓位上限等信息，然后自动生成配置文件。
+
+如果想主动重新运行配置向导：
+
+```bash
+python -m predict_mm.main --setup --config config.toml
 ```
 
 ## Docker

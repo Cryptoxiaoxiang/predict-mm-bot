@@ -70,6 +70,7 @@ class BotConfig:
     replace_on_orderbook_change: bool = True
     cancel_all_on_start: bool = True
     cancel_all_on_shutdown: bool = True
+    emergency_exit_on_buy_fill: bool = False
     strategy: StrategyConfig = field(default_factory=StrategyConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
     markets: list[MarketConfig] = field(default_factory=list)
@@ -91,6 +92,7 @@ def load_config(path: str | Path) -> BotConfig:
         replace_on_orderbook_change=bool(raw.get("replace_on_orderbook_change", True)),
         cancel_all_on_start=bool(raw.get("cancel_all_on_start", True)),
         cancel_all_on_shutdown=bool(raw.get("cancel_all_on_shutdown", True)),
+        emergency_exit_on_buy_fill=bool(raw.get("emergency_exit_on_buy_fill", False)),
         strategy=_strategy(raw.get("strategy", {})),
         risk=_risk(raw.get("risk", {})),
         markets=markets,

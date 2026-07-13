@@ -25,25 +25,27 @@
 
       <section id="notice" class="notice" hidden></section>
 
-      <section class="card advanced-card">
-        <div class="section-heading">
+      <details class="card account-card">
+        <summary class="account-summary">
           <div>
             <h2>账户设置</h2>
-            <p>仅实盘需要。密钥留空时，会保留已经保存的值。</p>
+            <p>仅实盘需要。点击展开账户与密钥配置。</p>
           </div>
-          <span id="secret-status" class="muted"></span>
+          <div class="account-summary-side"><span id="secret-status" class="muted"></span><span class="account-chevron" aria-hidden="true">⌄</span></div>
+        </summary>
+        <div class="account-content">
+          <form id="account-form">
+            <div class="form-grid">
+              <label>API Key<input name="api_key" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
+              <label>JWT Token<input name="jwt_token" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
+              <label>钱包 Private Key<input name="private_key" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
+              <label>Predict Account Address<input name="predict_account_address" placeholder="公开钱包地址" /></label>
+              <label>日志级别<select name="log_level"><option>INFO</option><option>DEBUG</option><option>WARNING</option><option>ERROR</option></select></label>
+            </div>
+            <button class="primary" type="submit">保存账户设置</button>
+          </form>
         </div>
-        <form id="account-form">
-          <div class="form-grid">
-            <label>API Key<input name="api_key" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
-            <label>JWT Token<input name="jwt_token" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
-            <label>钱包 Private Key<input name="private_key" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
-            <label>Predict Account Address<input name="predict_account_address" placeholder="公开钱包地址" /></label>
-            <label>日志级别<select name="log_level"><option>INFO</option><option>DEBUG</option><option>WARNING</option><option>ERROR</option></select></label>
-          </div>
-          <button class="primary" type="submit">保存账户设置</button>
-        </form>
-      </section>
+      </details>
 
       <section class="card controls">
         <div>

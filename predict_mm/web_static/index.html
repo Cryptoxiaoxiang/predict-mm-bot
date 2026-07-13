@@ -81,7 +81,7 @@
             <div class="section-heading">
               <div>
                 <h3>做市市场</h3>
-                <p>每个市场可单独选择 YES / NO 与单次挂单数量；保存后会同时运行。</p>
+                <p>粘贴市场网址后，选择具体市场与可交易选项；保存后会同时运行。</p>
               </div>
               <button id="add-market-button" class="secondary" type="button">+ 添加市场</button>
             </div>
@@ -114,7 +114,7 @@
         </div>
         <div class="form-grid">
           <label class="market-id-field"><span class="label-with-help">市场网址 / Market ID <span class="tooltip" tabindex="0" aria-label="查看市场网址说明">?<span class="tooltip-text" role="tooltip">可直接粘贴 Predict.fun 市场页面的网址，例如 https://predict.fun/market/xxx 或 https://predict.fun/zh-cn/market/xxx；系统会自动查找并填入数字 Market ID。也可以直接输入数字 ID。</span></span></span><div class="market-id-input"><input data-field="market_id" required placeholder="粘贴 predict.fun 市场网址，或输入数字 ID" /><button class="secondary resolve-market" type="button">识别网址</button></div><div class="market-lookup-result" data-field="market_lookup" hidden></div></label>
-          <label>交易方向<select data-field="outcome"><option>YES</option><option>NO</option></select></label>
+          <label>挂单选项<select data-field="outcome"><option>YES</option><option>NO</option></select></label>
           <label>单次挂单数量<input data-field="quote_size" inputmode="decimal" value="1.0" required /></label>
         </div>
       </article>

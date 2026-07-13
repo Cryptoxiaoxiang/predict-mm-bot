@@ -1,30 +1,22 @@
-# Predict.fun Market Maker Bot
+# Predict.fun 自动挂单机器人
 
-一个面向 Predict.fun / 预测市场 CLOB 的自动挂单撤单机器人骨架。
+这是一个为 Predict.fun 设计的自动挂单、撤单和重新报价工具。它会按设定的节奏管理订单，并提供仓位与订单数量限制。
 
-默认是 `dry_run: true`，只会模拟报价、打印计划，不会真实下单。请先用小资金和测试市场验证接口、最小下单量、tick size、撤单行为，再开启实盘。
+> 本工具不能保证订单永远不会成交。任何放在订单簿上的订单都有成交风险。第一次使用请保持模拟运行，并从很小的金额开始。
 
-## 什么是 dry-run / 模拟运行？
+## 开始前
 
-`dry-run` 可以理解成“模拟运行”或“安全模式”。
+你需要：
 
-- `dry_run = true`：机器人只会读取配置、计算报价、打印日志，并在程序内部模拟“创建订单 / 撤销订单”；不会真的向 Predict.fun 发起下单请求。
-- `dry_run = false`：机器人会尝试调用真实 API 下单和撤单，这才是实盘模式。
+- 一台已安装 Python 3.11 或更高版本的电脑；
+- 想要运行的 Predict.fun 市场的 `Market ID`；
+- 只有准备真实交易时，才需要 Predict.fun API Key、JWT Token 和钱包私钥。
 
-建议先保持 `dry_run = true` 跑一段时间，确认挂单价格、撤单节奏、风控限制都正常，再考虑切换到实盘。即使进入实盘，也应该先用很小的 `quote_size` 和仓位上限测试。
+模拟运行不需要填写钱包私钥，也不会发送真实订单。
 
-## 功能
+## 首次使用
 
-- 多市场轮询
-- 挂单后自动撤单并重挂
-- 尽量只做 maker，不主动吃单
-- 最大订单、最大库存、最大总敞口限制
-- 启动 / 退出时可自动撤销开放订单
-- dry-run 模拟模式
-- Docker 部署
-- 日志输出
-
-## 快速开始
+在项目目录中依次运行：
 
 ```bash
 python -m venv .venv
@@ -33,73 +25,91 @@ pip install -e .
 python -m predict_mm.main --config config.toml
 ```
 
-第一次运行时，如果当前目录没有 `.env` 或 `config.toml`，程序会自动打开中文初始配置向导，逐步让你输入 API Key、JWT Token、Market ID、挂单数量和仓位上限等信息，然后自动生成配置文件。
+第一次启动会自动打开中文配置向导。按提示填写后，机器人会生成两个只保存在你电脑上的配置文件：
 
-如果想主动重新运行配置向导：
+- `.env`：账户和登录信息；
+- `config.toml`：市场、挂单数量与风险限制。
+
+默认会启用 `dry_run`（模拟运行）。完成向导后，程序会以模拟模式启动；按 `Ctrl+C` 可安全停止。
+
+如果只想重新填写配置、不立即启动机器人，请运行：
 
 ```bash
 python -m predict_mm.main --setup --config config.toml
 ```
 
-## Docker
+## 配置向导怎么填
+
+第一次测试时，推荐这样填写：
+
+- `API Key`：可暂时留空；
+- `JWT Token`：可暂时留空；
+- `钱包 Private Key`：留空；
+- `Predict Account Address`：留空；
+- `是否先使用 dry-run 模拟运行`：选择 `yes`；
+- `Market ID`：必填，填入你要运行的 Predict.fun 市场 ID；
+- `交易 outcome`：选择 `YES` 或 `NO`；
+- `单次挂单数量`、`单市场最大仓位`、`总最大仓位`：先使用很小的数字，例如 `1`、`2`、`5`。
+
+`PREDICT_ACCOUNT_ADDRESS` 是公开的钱包/交易账户地址，不是私钥。只有真实挂单时才需要填写，并且必须与私钥对应。
+
+## 什么是模拟运行（dry-run）
+
+`dry_run = true` 是模拟运行：机器人会计算报价、输出日志，并模拟订单的创建和撤销，不会真实下单。
+
+`dry_run = false` 才是实盘运行：机器人会提交真实订单，并在设定时间后撤单或重新挂单。
+
+建议先以模拟运行观察几个小时，确认市场、挂单数量和撤单节奏都符合预期，再切换实盘。
+
+## 切换到实盘
+
+确认模拟运行没有问题后：
+
+1. 在 `.env` 填入 API Key、JWT Token、钱包 Private Key 和 Predict Account Address；
+2. 在 `config.toml` 将 `dry_run = true` 改为 `dry_run = false`；
+3. 保持很小的单次挂单数量和仓位上限；
+4. 启动后先到 Predict.fun 页面确认订单和撤单行为是否符合预期。
+
+不需要填写 API Secret；Predict.fun 当前不要求该字段。
+
+初次实盘时，如果程序提示缺少市场信息，请按提示补充市场的 `token_id` 等信息；通常机器人会自动尝试获取这些数据。
+
+## 常用调整
+
+在 `config.toml` 中：
+
+- `quote_size`：每次挂单的数量；
+- `cancel_after_seconds`：订单保留多少秒后撤销；
+- `max_position_per_market`：单个市场允许的最大仓位；
+- `max_total_position`：所有市场合计允许的最大仓位；
+- `dry_run`：是否处于模拟运行。
+
+配置修改后，停止机器人再重新启动即可生效。
+
+## 长时间运行（Docker）
+
+在电脑上完成首次配置向导后，可以用 Docker 长时间运行：
 
 ```bash
-cp .env.example .env
-cp config.example.toml config.toml
 docker compose up -d --build
+```
+
+查看运行日志：
+
+```bash
 docker compose logs -f
 ```
 
-## 配置
+停止机器人：
 
-编辑 `config.toml`：
-
-```toml
-dry_run = true
-
-[[markets]]
-id = "example-market-id"
-enabled = true
+```bash
+docker compose down
 ```
 
-编辑 `.env`：
+## 账户安全
 
-```env
-PREDICT_API_BASE_URL=https://api.predict.fun
-PREDICT_API_KEY=
-PREDICT_JWT_TOKEN=
-PREDICT_PRIVATE_KEY=
-PREDICT_ACCOUNT_ADDRESS=
-PREDICT_CHAIN_ID=56
-```
+- `.env` 和 `config.toml` 不会被提交到 GitHub；不要把它们发送给任何人。
+- 不要在聊天、截图或公开仓库中暴露 API Key、JWT Token 或私钥。
+- 程序启动和停止时会尝试撤销它管理的开放订单；即使如此，也应在每次实盘后到 Predict.fun 页面核对开放订单。
 
-真实密钥不要提交到 GitHub。项目已在 `.gitignore` 中排除 `.env` 和 `config.toml`。
-
-Predict.fun 官方文档当前说明：Mainnet 请求需要 API Key；创建订单、查看个人订单这类钱包相关操作还需要 JWT Token。文档没有要求 API Secret，所以本项目不保留 API Secret 字段。
-
-如果要从 dry-run 切到实盘，建议在 `config.toml` 的每个市场里填入官方 SDK 签单所需字段：
-
-```toml
-[[markets]]
-id = "123"
-enabled = true
-outcome = "YES"
-token_id = "..."
-fee_rate_bps = 0
-is_neg_risk = false
-is_yield_bearing = false
-```
-
-其中 `fee_rate_bps`、`is_neg_risk`、`is_yield_bearing` 可以从 Predict.fun 的 `GET /v1/markets` 或 `GET /v1/markets/{id}` 返回数据里获取；`token_id` 来自对应 outcome 的链上 token id。如果这些字段留空，机器人会在实盘下单前尝试调用 `GET /v1/markets/{id}` 自动补齐；补不齐时会拒绝下单并提示缺少哪个字段。
-
-## 安全提醒
-
-这不是“保证不成交”的系统。任何挂在盘口上的 maker 订单都有被成交的可能。开启实盘前建议：
-
-1. 先 dry-run 至少几个小时；
-2. 单笔数量设为极小；
-3. 每个市场库存上限设小；
-4. 确认程序异常退出时会撤单；
-5. 手动检查交易所页面上的开放订单。
-
-另外，Predict.fun 的 `POST /v1/orders/remove` 是从订单簿快速移除订单，不等同于链上取消订单。官方文档提醒：如果需要彻底链上取消，还应使用官方 SDK 的链上 cancel 方法。
+Predict.fun 的快速撤单仅将订单从订单簿移除，不等同于链上取消；如需彻底取消，请使用 Predict.fun 官方工具完成链上取消。

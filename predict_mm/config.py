@@ -11,8 +11,7 @@ from pathlib import Path
 class Settings:
     api_base_url: str = "https://api.predict.fun"
     api_key: str | None = None
-    api_secret: str | None = None
-    api_passphrase: str | None = None
+    jwt_token: str | None = None
     log_level: str = "INFO"
 
     @classmethod
@@ -21,8 +20,7 @@ class Settings:
         return cls(
             api_base_url=os.getenv("PREDICT_API_BASE_URL", cls.api_base_url),
             api_key=os.getenv("PREDICT_API_KEY") or None,
-            api_secret=os.getenv("PREDICT_API_SECRET") or None,
-            api_passphrase=os.getenv("PREDICT_API_PASSPHRASE") or None,
+            jwt_token=os.getenv("PREDICT_JWT_TOKEN") or None,
             log_level=os.getenv("LOG_LEVEL", cls.log_level),
         )
 

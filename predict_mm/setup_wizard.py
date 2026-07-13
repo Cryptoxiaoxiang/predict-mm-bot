@@ -13,8 +13,8 @@ class WizardAnswers:
     private_key: str = ""
     predict_account_address: str = ""
     log_level: str = "INFO"
-    dry_run: bool = True
-    emergency_exit_on_buy_fill: bool = False
+    dry_run: bool = False
+    emergency_exit_on_buy_fill: bool = True
     market_id: str = ""
     outcome: str = "YES"
     token_id: str = ""
@@ -37,7 +37,7 @@ def run_setup_wizard(config_path: str | Path = "config.toml", env_path: str | Pa
     env_file = Path(env_path)
 
     print("\nPredict.fun 做市机器人初始配置向导")
-    print("我会帮你生成 .env 和 config.toml。默认使用 dry-run 模拟运行，不会真实下单。\n")
+    print("我会帮你生成 .env 和 config.toml。默认是实盘运行，请确认后再继续。\n")
 
     answers = WizardAnswers(
         api_base_url=_ask("API 地址", "https://api.predict.fun"),
@@ -46,8 +46,8 @@ def run_setup_wizard(config_path: str | Path = "config.toml", env_path: str | Pa
         private_key=_ask_secret("钱包 Private Key，实盘签单需要，可先留空"),
         predict_account_address=_ask("Predict Account Address，可先留空", ""),
         log_level=_ask("日志级别", "INFO").upper(),
-        dry_run=_ask_bool("是否先使用 dry-run 模拟运行？强烈建议选 yes", True),
-        emergency_exit_on_buy_fill=_ask_bool("买单被吃单后是否以 0.01 紧急卖出？可能造成损失", False),
+        dry_run=_ask_bool("是否使用 dry-run 模拟运行？选择 no 会真实下单", False),
+        emergency_exit_on_buy_fill=_ask_bool("买单被吃单后是否以 0.01 紧急卖出？可能造成损失", True),
         market_id=_ask_required("要运行的 Market ID"),
         outcome=_ask_choice("交易 outcome", "YES", {"YES", "NO"}),
         token_id=_ask("Outcome token_id，实盘建议填写；留空则运行时尝试自动获取", ""),

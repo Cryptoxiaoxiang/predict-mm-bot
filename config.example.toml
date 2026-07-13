@@ -9,6 +9,7 @@ cancel_all_on_shutdown = true
 id = "example-market-id"
 enabled = true
 outcome = "YES"
+quote_size = "1.0"
 # Optional. If omitted, the bot will try GET /v1/markets/{id}.
 token_id = ""
 

@@ -33,7 +33,6 @@ class SetupPayload(BaseModel):
     jwt_token: str = ""
     private_key: str = ""
     predict_account_address: str = ""
-    chain_id: str = "56"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     dry_run: bool = True
     market_id: str = Field(min_length=1, max_length=200)
@@ -189,7 +188,6 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
             predict_account_address=payload.predict_account_address.strip()
             or current.predict_account_address
             or "",
-            chain_id=payload.chain_id.strip(),
             log_level=payload.log_level,
             dry_run=payload.dry_run,
             market_id=payload.market_id.strip(),
@@ -232,8 +230,6 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
 
 def _validate_setup(payload: SetupPayload) -> None:
     try:
-        if int(payload.chain_id) <= 0:
-            raise ValueError
         if int(payload.fee_rate_bps) < 0:
             raise ValueError
         for value in (
@@ -245,7 +241,7 @@ def _validate_setup(payload: SetupPayload) -> None:
             if Decimal(value) <= 0:
                 raise ValueError
     except (InvalidOperation, ValueError) as error:
-        raise HTTPException(status_code=422, detail="数量、费率和 Chain ID 必须是有效的正数。") from error
+        raise HTTPException(status_code=422, detail="数量和费率必须是有效的正数。") from error
 
 
 def _apply_settings_to_process(answers: WizardAnswers) -> None:
@@ -255,7 +251,6 @@ def _apply_settings_to_process(answers: WizardAnswers) -> None:
         "PREDICT_JWT_TOKEN": answers.jwt_token,
         "PREDICT_PRIVATE_KEY": answers.private_key,
         "PREDICT_ACCOUNT_ADDRESS": answers.predict_account_address,
-        "PREDICT_CHAIN_ID": answers.chain_id,
         "LOG_LEVEL": answers.log_level,
     }.items():
         os.environ[key] = value

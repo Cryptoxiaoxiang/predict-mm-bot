@@ -46,9 +46,7 @@ class SetupPayload(BaseModel):
 
 class AccountPayload(BaseModel):
     api_key: str = ""
-    jwt_token: str = ""
     private_key: str = ""
-    generate_jwt: bool = False
     predict_account_address: str = ""
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
@@ -236,14 +234,11 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
         current = Settings.from_env()
         api_key = payload.api_key.strip() or current.api_key or ""
         private_key = payload.private_key.strip() or current.private_key or ""
-        jwt_token = payload.jwt_token.strip() or current.jwt_token or ""
+        jwt_token = current.jwt_token or ""
         generated_jwt = False
-        if payload.generate_jwt:
-            if not api_key or not private_key:
-                raise HTTPException(
-                    status_code=422,
-                    detail="自动生成 JWT 需要 API Key 和 EOA 钱包 Private Key。",
-                )
+        if private_key:
+            if not api_key:
+                raise HTTPException(status_code=422, detail="自动生成 JWT 需要 API Key。")
             client = PredictClient(
                 settings=Settings(api_base_url=current.api_base_url, api_key=api_key),
                 dry_run=False,

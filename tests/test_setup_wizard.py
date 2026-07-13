@@ -44,3 +44,9 @@ def test_build_config_text_supports_multiple_markets() -> None:
     assert 'id = "market-yes"' in text
     assert 'id = "market-no"' in text
     assert 'quote_size = "2.0"' in text
+
+
+def test_build_config_text_can_enable_emergency_exit() -> None:
+    text = build_config_text(WizardAnswers(market_id="market", emergency_exit_on_buy_fill=True))
+
+    assert "emergency_exit_on_buy_fill = true" in text

@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Dry-run-first market making bot scaffold for Predict.fun style prediction markets."
 requires-python = ">=3.11"
 dependencies = [
+  "predict-sdk>=0.0.20",
 ]
 
 [project.optional-dependencies]

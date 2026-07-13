@@ -34,3 +34,17 @@ def test_strategy_skips_tight_spread() -> None:
 
     assert strategy.build_quotes(MarketConfig(id="m1"), book) == []
 
+
+def test_strategy_uses_per_market_quote_size() -> None:
+    strategy = PassiveMakerStrategy(
+        StrategyConfig(tick_size=Decimal("0.001"), quote_size=Decimal("1"), min_edge_ticks=2)
+    )
+    book = OrderBook(
+        market_id="m1",
+        bids=[Level(Decimal("0.40"), Decimal("10"))],
+        asks=[Level(Decimal("0.60"), Decimal("10"))],
+    )
+
+    quotes = strategy.build_quotes(MarketConfig(id="m1", quote_size=Decimal("3")), book)
+
+    assert {quote.size for quote in quotes} == {Decimal("3")}

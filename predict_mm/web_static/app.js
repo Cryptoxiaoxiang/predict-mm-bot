@@ -97,8 +97,6 @@ async function refreshStatus() {
     document.querySelector('#run-status').textContent = status.running ? '运行中' : (status.configured ? '已停止' : '等待配置');
     const markets = status.markets || [];
     document.querySelector('#market-value').textContent = markets.length ? `${markets.length} 个市场` : '—';
-    document.querySelector('#outcome-value').textContent = markets.length ? markets.map((market) => market.outcome).join(' / ') : '—';
-    document.querySelector('#size-value').textContent = markets.length ? markets.map((market) => market.quote_size).join(' / ') : '—';
     renderOpenOrders(status.open_order_markets || []);
     document.querySelector('#start-button').disabled = !status.configured || status.running;
     document.querySelector('#stop-button').disabled = !status.running;

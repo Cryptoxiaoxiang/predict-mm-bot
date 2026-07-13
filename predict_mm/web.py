@@ -171,6 +171,21 @@ class DashboardState:
             await client.close()
 
 
+    async def account_balance(self) -> dict[str, str]:
+        """Return the configured wallet's raw USDT balance without touching the bot."""
+        settings = Settings.from_env()
+        client = PredictClient(settings=settings, dry_run=False)
+        try:
+            balance, account_address = await client.get_usdt_balance()
+        finally:
+            await client.close()
+        return {
+            "asset": "USDT",
+            "balance": format(balance, "f"),
+            "account_address": account_address,
+        }
+
+
 def create_app(config_path: str | Path = "config.toml", env_path: str | Path = ".env") -> FastAPI:
     state = DashboardState(Path(config_path), Path(env_path))
 
@@ -189,6 +204,13 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
     @app.get("/api/status")
     async def status() -> dict[str, object]:
         return state.overview()
+
+    @app.get("/api/balance")
+    async def balance() -> dict[str, object]:
+        try:
+            return {"ok": True, **await state.account_balance()}
+        except RuntimeError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     @app.get("/api/logs")
     async def logs() -> dict[str, list[str]]:

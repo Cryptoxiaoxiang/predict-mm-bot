@@ -56,7 +56,7 @@ python -m predict_mm.web
 http://127.0.0.1:8080
 ```
 
-第一次打开网页时，先填写 Market ID、交易方向和风险限制，再点“保存配置”。网页会生成两个只保存在服务器上的配置文件：
+第一次打开网页时，填写第一个市场的 Market ID、交易方向和风险限制；需要更多市场时点“添加市场”。全部市场确认后，只需点一次“保存配置”，机器人便会同时运行它们。网页会生成两个只保存在服务器上的配置文件：
 
 - `.env`：账户和登录信息；
 - `config.toml`：市场、挂单数量与风险限制。
@@ -95,9 +95,10 @@ python -m predict_mm.main --config config.toml
 - `钱包 Private Key`：留空；
 - `Predict Account Address`：留空；
 - `是否先使用 dry-run 模拟运行`：选择 `yes`；
-- `Market ID`：必填，填入你要运行的 Predict.fun 市场 ID；
-- `交易 outcome`：选择 `YES` 或 `NO`；
-- `单次挂单数量`、`单市场最大仓位`、`总最大仓位`：先使用很小的数字，例如 `1`、`2`、`5`。
+- `Market ID`：每个市场都必填，填入要运行的 Predict.fun 市场 ID；
+- `交易 outcome`：每个市场分别选择 `YES` 或 `NO`；
+- `单次挂单数量`：每个市场分别设置。首次建议使用很小的数字，例如 `1`；
+- `单市场最大仓位`、`总最大仓位`：所有市场共用的风险上限，首次可设为 `2`、`5`。
 
 `PREDICT_ACCOUNT_ADDRESS` 是公开的钱包/交易账户地址，不是私钥。只有真实挂单时才需要填写，并且必须与私钥对应。
 
@@ -126,7 +127,7 @@ python -m predict_mm.main --config config.toml
 
 在 `config.toml` 中：
 
-- `quote_size`：每次挂单的数量；
+- 每个 `[[markets]]` 中的 `quote_size`：该市场每次挂单的数量；
 - `cancel_after_seconds`：订单保留多少秒后撤销；
 - `max_position_per_market`：单个市场允许的最大仓位；
 - `max_total_position`：所有市场合计允许的最大仓位；

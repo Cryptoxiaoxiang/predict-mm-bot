@@ -1,0 +1,14 @@
+.env
+config.toml
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+logs/
+*.pem
+*.key
+*.sqlite
+*.db

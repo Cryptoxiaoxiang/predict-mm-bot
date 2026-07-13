@@ -1,0 +1,26 @@
+dry_run = true
+poll_interval_seconds = 2.0
+cancel_after_seconds = 8.0
+replace_on_orderbook_change = true
+cancel_all_on_start = true
+cancel_all_on_shutdown = true
+
+[[markets]]
+id = "example-market-id"
+enabled = true
+outcome = "YES"
+
+[strategy]
+tick_size = "0.001"
+quote_size = "1.0"
+join_best_price = false
+min_edge_ticks = 2
+max_spread_to_quote = "0.20"
+min_spread_to_quote = "0.006"
+
+[risk]
+max_order_size = "1.0"
+max_position_per_market = "10.0"
+max_total_position = "50.0"
+max_open_orders_per_market = 2
+pause_after_fill_seconds = 60

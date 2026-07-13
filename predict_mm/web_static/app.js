@@ -223,19 +223,14 @@ accountForm.addEventListener('submit', async (event) => {
     const result = await request('/api/account', {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(values),
     });
-    ['api_key', 'jwt_token', 'private_key'].forEach((name) => {
+    ['api_key', 'private_key'].forEach((name) => {
       accountForm.elements.namedItem(name).value = '';
     });
-    accountForm.elements.namedItem('generate_jwt').checked = false;
     showNotice(result.message);
     await refreshStatus();
   } catch (error) {
     showNotice(error.message, 'error');
   }
-});
-
-accountForm.elements.namedItem('private_key').addEventListener('input', (event) => {
-  if (event.target.value.trim()) accountForm.elements.namedItem('generate_jwt').checked = true;
 });
 
 document.querySelector('#start-button').addEventListener('click', async () => {

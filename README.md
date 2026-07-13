@@ -97,8 +97,8 @@ python -m predict_mm.main --config config.toml
 第一次测试时，推荐这样填写：
 
 - `API Key`：可暂时留空；
-- `JWT Token`：可暂时留空；
-- `钱包 Private Key`：留空；
+- `JWT Token`：EOA 钱包可由网页自动生成，无需手动填写；
+- `钱包 Private Key`：使用 EOA 实盘时填写。保存账户设置时，网页会用它在本机/VPS 内存中签署官方动态 message，并自动获取 JWT；私钥不会发送给 Predict.fun 或写入日志；
 - `Predict Account Address`：留空；
 - `是否使用 dry-run 模拟运行`：默认不勾选；勾选后才不会真实下单。
 - `Market ID`：每个市场都必填，填入要运行的 Predict.fun 市场 ID；

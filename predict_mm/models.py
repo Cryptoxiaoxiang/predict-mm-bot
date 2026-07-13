@@ -64,10 +64,20 @@ class ManagedOrder:
     quote: Quote
     created_at: float
     status: OrderStatus = OrderStatus.OPEN
+    order_hash: str | None = None
+    filled_size: Decimal = Decimal("0")
+    is_emergency_exit: bool = False
 
     @property
     def age_seconds(self) -> float:
         return monotonic() - self.created_at
+
+
+@dataclass(frozen=True)
+class WalletFillEvent:
+    order_id: str
+    filled_size: Decimal
+    order_hash: str | None = None
 
 
 def quantize_price(price: Decimal, tick_size: Decimal, side: Side) -> Decimal:

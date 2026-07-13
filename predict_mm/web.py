@@ -48,6 +48,7 @@ class AccountPayload(BaseModel):
     api_key: str = ""
     jwt_token: str = ""
     private_key: str = ""
+    generate_jwt: bool = False
     predict_account_address: str = ""
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
@@ -233,11 +234,38 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
     @app.post("/api/account")
     async def account(payload: AccountPayload) -> dict[str, object]:
         current = Settings.from_env()
+        api_key = payload.api_key.strip() or current.api_key or ""
+        private_key = payload.private_key.strip() or current.private_key or ""
+        jwt_token = payload.jwt_token.strip() or current.jwt_token or ""
+        generated_jwt = False
+        if payload.generate_jwt:
+            if not api_key or not private_key:
+                raise HTTPException(
+                    status_code=422,
+                    detail="自动生成 JWT 需要 API Key 和 EOA 钱包 Private Key。",
+                )
+            client = PredictClient(
+                settings=Settings(api_base_url=current.api_base_url, api_key=api_key),
+                dry_run=False,
+            )
+            try:
+                jwt_token = await client.create_eoa_jwt(private_key)
+                generated_jwt = True
+            except RuntimeError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            except Exception as error:  # noqa: BLE001
+                logging.getLogger("predict-mm").warning("自动生成 JWT 失败: %s", error)
+                raise HTTPException(
+                    status_code=502,
+                    detail="无法连接 Predict.fun 生成 JWT，请检查 API Key 和网络后重试。",
+                ) from error
+            finally:
+                await client.close()
         answers = WizardAnswers(
             api_base_url=current.api_base_url,
-            api_key=payload.api_key.strip() or current.api_key or "",
-            jwt_token=payload.jwt_token.strip() or current.jwt_token or "",
-            private_key=payload.private_key.strip() or current.private_key or "",
+            api_key=api_key,
+            jwt_token=jwt_token,
+            private_key=private_key,
             predict_account_address=payload.predict_account_address.strip()
             or current.predict_account_address
             or "",
@@ -246,6 +274,8 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
         state.env_path.write_text(build_env_text(answers), encoding="utf-8")
         _apply_settings_to_process(answers)
         message = "账户设置已保存。"
+        if generated_jwt:
+            message += " 已使用 EOA 钱包本地签名并自动生成 JWT。"
         if state.running:
             message += " 机器人会在下次启动时使用新的账户设置。"
         return {"ok": True, "message": message}

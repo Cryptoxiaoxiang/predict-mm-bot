@@ -26,6 +26,23 @@
 
       <section id="notice" class="notice" hidden></section>
 
+      <section class="card advanced-card">
+        <div class="section-heading">
+          <div>
+            <h2>实盘和高级选项</h2>
+            <p>仅实盘需要。密钥留空时，会保留已经保存的值。</p>
+          </div>
+          <span id="secret-status" class="muted"></span>
+        </div>
+        <div class="form-grid">
+          <label>API Key<input form="setup-form" name="api_key" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
+          <label>JWT Token<input form="setup-form" name="jwt_token" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
+          <label>钱包 Private Key<input form="setup-form" name="private_key" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
+          <label>Predict Account Address<input form="setup-form" name="predict_account_address" placeholder="公开钱包地址" /></label>
+          <label>日志级别<select form="setup-form" name="log_level"><option>INFO</option><option>DEBUG</option><option>WARNING</option><option>ERROR</option></select></label>
+        </div>
+      </section>
+
       <section class="card controls">
         <div>
           <h2>运行控制</h2>
@@ -38,13 +55,23 @@
         </div>
       </section>
 
+      <section class="card open-orders-card">
+        <div class="section-heading">
+          <div>
+            <h2>当前挂单市场</h2>
+            <p>仅显示机器人当前管理的开放订单；手动创建的订单不会显示在这里。</p>
+          </div>
+          <span id="open-orders-summary" class="muted">暂无挂单</span>
+        </div>
+        <div id="open-orders-list" class="open-orders-list" aria-live="polite"></div>
+      </section>
+
       <section class="card">
         <div class="section-heading">
           <div>
             <h2>首次配置 / 修改配置</h2>
-            <p>密钥输入框留空时，会保留已经保存的值。</p>
+            <p>先配置市场和风险限制，再保存。</p>
           </div>
-          <span id="secret-status" class="muted"></span>
         </div>
         <form id="setup-form">
           <div class="market-section">
@@ -67,17 +94,6 @@
           <label class="switch"><input type="checkbox" name="dry_run" /><span>使用模拟运行（不会真实下单）</span></label>
           <label class="switch warning-switch"><input type="checkbox" name="emergency_exit_on_buy_fill" checked /><span class="label-with-help">买单被吃单后，立即以 0.01 紧急卖出 <span class="tooltip" tabindex="0" aria-label="查看紧急卖出说明">?<span class="tooltip-text" role="tooltip">实盘专用。买单被吃单（包括部分成交）时，机器人会撤掉该市场其他订单、停止继续报价，并以 0.01 的非 post-only 卖单卖出已成交数量。这可能会造成损失，仅在你明确接受此风险时开启。</span></span></span></label>
 
-          <details>
-            <summary>实盘和高级选项</summary>
-            <p class="details-note">只有关闭模拟运行、准备实盘时才需要填写。请勿把这些信息发送给任何人。</p>
-            <div class="form-grid">
-              <label>API Key<input name="api_key" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
-              <label>JWT Token<input name="jwt_token" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
-              <label>钱包 Private Key<input name="private_key" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
-              <label>Predict Account Address<input name="predict_account_address" placeholder="公开钱包地址" /></label>
-              <label>日志级别<select name="log_level"><option>INFO</option><option>DEBUG</option><option>WARNING</option><option>ERROR</option></select></label>
-            </div>
-          </details>
           <button class="primary" type="submit">保存配置</button>
         </form>
       </section>

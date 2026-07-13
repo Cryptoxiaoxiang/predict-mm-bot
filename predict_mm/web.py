@@ -40,8 +40,6 @@ class SetupPayload(BaseModel):
     outcome: Literal["YES", "NO"] = "YES"
     token_id: str = ""
     fee_rate_bps: str = "0"
-    is_neg_risk: bool = False
-    is_yield_bearing: bool = False
     quote_size: str = "1.0"
     cancel_after_seconds: str = "8"
     max_position_per_market: str = "10.0"
@@ -198,8 +196,6 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
             outcome=payload.outcome,
             token_id=payload.token_id.strip(),
             fee_rate_bps=payload.fee_rate_bps.strip(),
-            is_neg_risk=payload.is_neg_risk,
-            is_yield_bearing=payload.is_yield_bearing,
             quote_size=payload.quote_size.strip(),
             cancel_after_seconds=payload.cancel_after_seconds.strip(),
             max_position_per_market=payload.max_position_per_market.strip(),

@@ -36,12 +36,13 @@ class PassiveMakerStrategy:
         if bid <= Decimal("0") or ask >= Decimal("1") or bid >= ask:
             return []
 
+        quote_size = market.quote_size or self.config.quote_size
         return [
             Quote(
                 market_id=market.id,
                 side=Side.BUY,
                 price=bid,
-                size=self.config.quote_size,
+                size=quote_size,
                 outcome=market.outcome,
                 token_id=market.token_id,
                 fee_rate_bps=market.fee_rate_bps,
@@ -52,7 +53,7 @@ class PassiveMakerStrategy:
                 market_id=market.id,
                 side=Side.SELL,
                 price=ask,
-                size=self.config.quote_size,
+                size=quote_size,
                 outcome=market.outcome,
                 token_id=market.token_id,
                 fee_rate_bps=market.fee_rate_bps,

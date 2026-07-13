@@ -73,6 +73,31 @@ def test_market_search_uses_official_search_endpoint() -> None:
     assert markets == [{"id": 123, "question": "Bitcoin?"}]
 
 
+def test_eoa_jwt_signs_the_dynamic_message_locally() -> None:
+    class StubClient(PredictClient):
+        def __init__(self) -> None:
+            super().__init__(Settings(api_key="api-key"), dry_run=False)
+            self.auth_payload: dict | None = None
+
+        async def _request(self, method, path, payload=None, query=None):  # type: ignore[no-untyped-def]
+            if path == "/v1/auth/message":
+                assert method == "GET"
+                return {"data": {"message": "Sign this one-time message"}}
+            assert method == "POST"
+            assert path == "/v1/auth"
+            self.auth_payload = payload
+            return {"data": {"token": "generated-jwt"}}
+
+    client = StubClient()
+    token = asyncio.run(client.create_eoa_jwt("0x" + "1" * 64))
+
+    assert token == "generated-jwt"
+    assert client.auth_payload is not None
+    assert client.auth_payload["signer"] == "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A"
+    assert client.auth_payload["signature"].startswith("0x")
+    assert client.auth_payload["message"] == "Sign this one-time message"
+
+
 def test_real_order_requires_sdk_inputs() -> None:
     client = PredictClient(
         Settings(api_key="api-key", jwt_token="jwt", private_key="0xabc"),

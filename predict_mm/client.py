@@ -1,3 +1,4 @@
+/opt/homebrew/Library/Homebrew/cmd/shellenv.sh: line 9: /bin/ps: Operation not permitted
 from __future__ import annotations
 
 import asyncio
@@ -29,6 +30,7 @@ class PredictClient:
         self.dry_run = dry_run
         self.base_url = settings.api_base_url.rstrip("/")
         self._dry_orders: dict[str, ManagedOrder] = {}
+        self._market_metadata: dict[str, dict] = {}
 
     async def close(self) -> None:
         return None
@@ -45,8 +47,10 @@ class PredictClient:
         if self.dry_run and self.settings.api_base_url == "https://api.predict.fun":
             return self._sample_orderbook(market_id)
 
+        market = await self._get_market_metadata(market_id)
+        tick_size = self._tick_size_from_market(market, market_id)
         response = await self._request("GET", f"/v1/markets/{market_id}/orderbook")
-        return self._parse_orderbook(market_id, self._data(response))
+        return self._parse_orderbook(market_id, self._data(response), tick_size=tick_size)
 
     async def get_positions(self) -> dict[str, Decimal]:
         if self.dry_run:
@@ -190,8 +194,7 @@ class PredictClient:
         ):
             return quote
 
-        response = await self._request("GET", f"/v1/markets/{quote.market_id}")
-        market = self._data(response)
+        market = await self._get_market_metadata(quote.market_id)
         return replace(
             quote,
             token_id=quote.token_id or self._find_outcome_token_id(market, quote.outcome),
@@ -251,7 +254,13 @@ class PredictClient:
             raw = response.read()
         return json.loads(raw.decode("utf-8")) if raw else {}
 
-    def _parse_orderbook(self, market_id: str, data: dict) -> OrderBook:
+    def _parse_orderbook(
+        self,
+        market_id: str,
+        data: dict,
+        *,
+        tick_size: Decimal | None = None,
+    ) -> OrderBook:
         bids_raw = data.get("bids") or data.get("buy") or []
         asks_raw = data.get("asks") or data.get("sell") or []
         bids = sorted(
@@ -260,7 +269,30 @@ class PredictClient:
             reverse=True,
         )
         asks = sorted([self._parse_level(row) for row in asks_raw], key=lambda level: level.price)
-        return OrderBook(market_id=market_id, bids=bids, asks=asks)
+        return OrderBook(market_id=market_id, bids=bids, asks=asks, tick_size=tick_size)
+
+    async def _get_market_metadata(self, market_id: str) -> dict:
+        if market_id not in self._market_metadata:
+            response = await self._request("GET", f"/v1/markets/{market_id}")
+            self._market_metadata[market_id] = self._data(response)
+        return self._market_metadata[market_id]
+
+    def _tick_size_from_market(self, market: dict, market_id: str) -> Decimal:
+        raw_precision = self._first_present(market, "decimalPrecision", "decimal_precision")
+        try:
+            precision_decimal = Decimal(str(raw_precision))
+            if precision_decimal != precision_decimal.to_integral_value():
+                raise ValueError
+            precision = int(precision_decimal)
+        except (ArithmeticError, ValueError) as error:
+            raise RuntimeError(
+                f"Market {market_id} is missing a valid decimalPrecision; refusing to quote with an unknown tick size."
+            ) from error
+        if not 0 <= precision <= 18:
+            raise RuntimeError(
+                f"Market {market_id} has unsupported decimalPrecision={precision}; refusing to quote."
+            )
+        return Decimal(1).scaleb(-precision)
 
     def _parse_level(self, row: dict | list) -> Level:
         if isinstance(row, (list, tuple)):
@@ -491,4 +523,5 @@ class PredictClient:
             market_id=market_id,
             bids=[Level(Decimal("0.493"), Decimal("100")), Level(Decimal("0.490"), Decimal("80"))],
             asks=[Level(Decimal("0.507"), Decimal("120")), Level(Decimal("0.510"), Decimal("90"))],
+            tick_size=Decimal("0.001"),
         )

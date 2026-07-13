@@ -7,6 +7,12 @@ def test_market_slug_is_extracted_from_predict_url() -> None:
     )
 
 
+def test_market_slug_is_extracted_from_localized_predict_url() -> None:
+    assert _market_slug_from_url("https://predict.fun/zh-cn/market/fifwc-fra-esp-2026-07-14") == (
+        "fifwc-fra-esp-2026-07-14"
+    )
+
+
 def test_market_slug_rejects_non_predict_url() -> None:
     try:
         _market_slug_from_url("https://example.com/market/test")

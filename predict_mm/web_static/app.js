@@ -68,8 +68,6 @@ form.addEventListener('submit', async (event) => {
   event.preventDefault();
   const values = Object.fromEntries(new FormData(form));
   values.dry_run = form.elements.namedItem('dry_run').checked;
-  values.is_neg_risk = form.elements.namedItem('is_neg_risk').checked;
-  values.is_yield_bearing = form.elements.namedItem('is_yield_bearing').checked;
   values.api_base_url = 'https://api.predict.fun';
   try {
     const result = await request('/api/setup', {

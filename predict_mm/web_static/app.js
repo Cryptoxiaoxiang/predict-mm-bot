@@ -11,6 +11,18 @@ function showNotice(message, kind = 'success') {
   notice.textContent = message;
 }
 
+function isPredictMarketUrl(value) {
+  try {
+    const url = new URL(value);
+    if (!['predict.fun', 'www.predict.fun'].includes(url.hostname.toLowerCase())) return false;
+    const parts = url.pathname.split('/').filter(Boolean);
+    const marketIndex = parts.indexOf('market');
+    return marketIndex >= 0 && Boolean(parts[marketIndex + 1]);
+  } catch (_) {
+    return false;
+  }
+}
+
 async function request(path, options = {}) {
   const response = await fetch(path, options);
   const data = await response.json();
@@ -45,7 +57,7 @@ function addMarket(market = {}) {
   const resolveButton = row.querySelector('.resolve-market');
   resolveButton.addEventListener('click', () => resolveMarketUrl(row));
   marketIdInput.addEventListener('change', () => {
-    if (marketIdInput.value.includes('predict.fun/market/')) resolveMarketUrl(row);
+    if (isPredictMarketUrl(marketIdInput.value.trim())) resolveMarketUrl(row);
   });
   marketsList.append(row);
   renumberMarkets();
@@ -76,7 +88,7 @@ function renderMarketLookup(row, result) {
 async function resolveMarketUrl(row) {
   const input = row.querySelector('[data-field="market_id"]');
   const value = input.value.trim();
-  if (!value.includes('predict.fun/market/')) {
+  if (!isPredictMarketUrl(value)) {
     showNotice('请先粘贴完整的 Predict.fun 市场网址。数字 Market ID 无需识别。', 'error');
     return;
   }

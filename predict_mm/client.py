@@ -12,7 +12,7 @@ from time import monotonic
 from uuid import uuid4
 
 from predict_mm.config import Settings
-from predict_mm.models import Level, ManagedOrder, OrderBook, OrderStatus, Quote
+from predict_mm.models import Level, ManagedOrder, OrderBook, OrderStatus, Quote, WalletFillEvent
 
 logger = logging.getLogger("predict-mm")
 
@@ -72,12 +72,13 @@ class PredictClient:
             positions[market_id] = positions.get(market_id, Decimal("0")) + signed_amount
         return positions
 
-    async def create_order(self, quote: Quote) -> ManagedOrder:
+    async def create_order(self, quote: Quote, *, post_only: bool = True) -> ManagedOrder:
         if self.dry_run:
             order = ManagedOrder(order_id=f"dry-{uuid4().hex[:12]}", quote=quote, created_at=monotonic())
             self._dry_orders[order.order_id] = order
             logger.info(
-                "DRY-RUN create %s %s %s @ %s on %s",
+                "DRY-RUN create%s %s %s %s @ %s on %s",
+                " emergency" if not post_only else "",
                 quote.side,
                 quote.size,
                 quote.outcome,
@@ -89,7 +90,9 @@ class PredictClient:
         self._require_api_key()
         self._require_jwt()
         quote = await self._complete_quote_with_market_metadata(quote)
-        signed_order_payload = await asyncio.to_thread(self._build_signed_limit_order_payload, quote)
+        signed_order_payload = await asyncio.to_thread(
+            self._build_signed_limit_order_payload, quote, post_only
+        )
         response = await self._request("POST", "/v1/orders", signed_order_payload)
         data = self._data(response)
         order_id = str(
@@ -99,7 +102,46 @@ class PredictClient:
             or data.get("orderHash")
             or data.get("order_hash")
         )
-        return ManagedOrder(order_id=order_id, quote=quote, created_at=monotonic())
+        return ManagedOrder(
+            order_id=order_id,
+            quote=quote,
+            created_at=monotonic(),
+            order_hash=str(data.get("orderHash") or data.get("order_hash") or "") or None,
+        )
+
+    async def stream_wallet_fill_events(self):
+        """Yield confirmed wallet fills from Predict's account WebSocket."""
+        if self.dry_run:
+            return
+
+        self._require_api_key()
+        self._require_jwt()
+        try:
+            from websockets.asyncio.client import connect
+        except ImportError as error:
+            raise RuntimeError("WebSocket support requires the websockets package.") from error
+
+        async with connect(
+            "wss://ws.predict.fun/ws",
+            additional_headers={"x-api-key": self.settings.api_key},
+        ) as websocket:
+            await websocket.send(
+                json.dumps(
+                    {
+                        "method": "subscribe",
+                        "requestId": 1,
+                        "params": [f"predictWalletEvents/{self.settings.jwt_token}"],
+                    }
+                )
+            )
+            async for raw_message in websocket:
+                message = json.loads(raw_message)
+                if message.get("method") == "heartbeat":
+                    await websocket.send(json.dumps({"method": "heartbeat", "data": message.get("data")}))
+                    continue
+                event = self._wallet_fill_event(message)
+                if event is not None:
+                    yield event
 
     async def cancel_order(self, order_id: str) -> None:
         if self.dry_run:
@@ -230,7 +272,7 @@ class PredictClient:
             size=Decimal(str(row.get("size") or row.get("quantity"))),
         )
 
-    def _build_signed_limit_order_payload(self, quote: Quote) -> dict:
+    def _build_signed_limit_order_payload(self, quote: Quote, post_only: bool = True) -> dict:
         self._require_real_order_inputs(quote)
         try:
             from predict_sdk import (  # type: ignore[import-not-found]
@@ -279,16 +321,30 @@ class PredictClient:
         order_hash = builder.build_typed_data_hash(typed_data)
         signed_order = builder.sign_typed_data_order(typed_data)
         signed_order_dict = self._signed_order_to_api_dict(signed_order, order_hash)
-        return {
-            "data": {
-                "pricePerShare": str(quote.price),
-                "strategy": "LIMIT",
-                "isPostOnly": True,
-                "reservedBalancePolicy": "REJECT_MARKET_ORDER",
-                "selfTradePrevention": "CANCEL_MAKER",
-                "order": signed_order_dict,
-            }
+        data = {
+            "pricePerShare": str(quote.price),
+            "strategy": "LIMIT",
+            "isPostOnly": post_only,
+            "selfTradePrevention": "CANCEL_MAKER",
+            "order": signed_order_dict,
         }
+        if post_only:
+            data["reservedBalancePolicy"] = "REJECT_MARKET_ORDER"
+        return {"data": data}
+
+    def _wallet_fill_event(self, message: dict) -> WalletFillEvent | None:
+        if message.get("type") != "orderTransactionSuccess":
+            return None
+        fill = message.get("fill") or (message.get("details") or {}).get("fill") or {}
+        size_wei = fill.get("executedSizeWei")
+        order_id = message.get("orderId")
+        if not order_id or size_wei in (None, ""):
+            return None
+        return WalletFillEvent(
+            order_id=str(order_id),
+            order_hash=str(message.get("orderHash") or "") or None,
+            filled_size=Decimal(str(size_wei)) / Decimal(10**18),
+        )
 
     def _signed_order_to_api_dict(
         self,

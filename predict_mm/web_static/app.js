@@ -39,11 +39,13 @@ function setOutcomeOptions(row, outcomes, selected = '') {
   const select = row.querySelector('[data-field="outcome"]');
   const values = [...new Set((outcomes || []).map((value) => String(value).trim()).filter(Boolean))];
   if (!values.length) values.push('YES', 'NO');
+  const hasYes = values.some((value) => value.toUpperCase() === 'YES');
+  const hasNo = values.some((value) => value.toUpperCase() === 'NO');
+  if (hasYes && hasNo && !values.includes('YES_NO')) values.push('YES_NO');
   if (selected && !values.includes(selected)) values.push(selected);
   select.replaceChildren(...values.map((value) => {
     const option = document.createElement('option');
-    option.value = value;
-    option.textContent = value;
+    option.value = value === 'YES_NO' ? 'Yes & No（双向）' : value;
     return option;
   }));
   select.value = selected && values.includes(selected) ? selected : values[0];
@@ -106,6 +108,22 @@ function renderMarketLookup(row, result) {
       });
       group.append(button);
     });
+    const hasYes = outcomes.some((outcome) => outcome.toUpperCase() === 'YES');
+    const hasNo = outcomes.some((outcome) => outcome.toUpperCase() === 'NO');
+    if (hasYes && hasNo) {
+      const bothButton = document.createElement('button');
+      bothButton.type = 'button';
+      bothButton.className = 'market-match';
+      bothButton.textContent = '选择「Yes & No」双向挂单';
+      bothButton.addEventListener('click', () => {
+        row.querySelector('[data-field="market_id"]').value = market.id;
+        setOutcomeOptions(row, outcomes, 'YES_NO');
+        container.hidden = true;
+        formDirty = true;
+        showNotice(`已选择 ${market.question} · Yes & No 双向挂单（Market ID：${market.id}）`);
+      });
+      group.append(bothButton);
+    }
     container.append(group);
   });
 }
@@ -152,29 +170,29 @@ function collectMarkets() {
   }));
 }
 
-function renderOpenOrders(markets = []) {
+function renderOpenOrders(orders = []) {
   const list = document.querySelector('#open-orders-list');
   const summary = document.querySelector('#open-orders-summary');
   list.replaceChildren();
-  const total = markets.reduce((count, market) => count + market.buy_orders + market.sell_orders, 0);
-  summary.textContent = total ? `${markets.length} 个市场 · ${total} 笔挂单` : '暂无挂单';
-  if (!markets.length) {
+  summary.textContent = orders.length ? `${orders.length} 笔挂单` : '暂无挂单';
+  if (!orders.length) {
     const empty = document.createElement('p');
     empty.className = 'empty-state';
     empty.textContent = '机器人当前没有管理中的挂单。';
     list.append(empty);
     return;
   }
-  markets.forEach((market) => {
+  orders.forEach((order) => {
     const row = document.createElement('article');
     row.className = 'open-order-row';
     const name = document.createElement('strong');
-    name.textContent = `市场 ${market.market_id} · ${market.outcome}`;
+    const side = order.side === 'buy' ? '买入' : '卖出';
+    name.textContent = `市场 ${order.market_id} · ${side} ${order.outcome}`;
     const details = document.createElement('span');
-    const labels = [`买单 ${market.buy_orders} 笔`, `卖单 ${market.sell_orders} 笔`];
-    if (market.emergency_exit_orders) labels.push(`紧急卖单 ${market.emergency_exit_orders} 笔`);
+    const labels = [`价格 ${order.price}`, `数量 ${order.size}`, `订单 ${order.order_id}`];
+    if (order.is_emergency_exit) labels.push('紧急卖单');
     details.textContent = labels.join(' · ');
-    if (market.emergency_exit_orders) details.className = 'emergency';
+    if (order.is_emergency_exit) details.className = 'emergency';
     row.append(name, details);
     list.append(row);
   });
@@ -190,7 +208,7 @@ async function refreshStatus() {
     document.querySelector('#run-status').textContent = status.running ? '运行中' : (status.configured ? '已停止' : '等待配置');
     const markets = status.markets || [];
     document.querySelector('#market-value').textContent = markets.length ? `${markets.length} 个市场` : '—';
-    renderOpenOrders(status.open_order_markets || []);
+    renderOpenOrders(status.open_orders || []);
     document.querySelector('#start-button').disabled = !status.configured || status.running;
     document.querySelector('#stop-button').disabled = !status.running;
     document.querySelector('#cancel-button').disabled = !status.configured;

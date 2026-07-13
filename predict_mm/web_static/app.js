@@ -37,18 +37,28 @@ function setField(name, value, target = form) {
 
 function setOutcomeOptions(row, outcomes, selected = '') {
   const select = row.querySelector('[data-field="outcome"]');
-  const values = [...new Set((outcomes || []).map((value) => String(value).trim()).filter(Boolean))];
-  if (!values.length) values.push('YES', 'NO');
-  const hasYes = values.some((value) => value.toUpperCase() === 'YES');
-  const hasNo = values.some((value) => value.toUpperCase() === 'NO');
+  const canonicalOutcome = (value) => {
+    const text = String(value || '').trim();
+    const normalized = text.toUpperCase();
+    if (normalized === 'YES') return 'Yes';
+    if (normalized === 'NO') return 'No';
+    if (['YES_NO', 'YES&NO', 'YES AND NO'].includes(normalized)) return 'YES_NO';
+    return text;
+  };
+  const values = [...new Set((outcomes || []).map(canonicalOutcome).filter(Boolean))];
+  if (!values.length) values.push('Yes', 'No');
+  const hasYes = values.includes('Yes');
+  const hasNo = values.includes('No');
   if (hasYes && hasNo && !values.includes('YES_NO')) values.push('YES_NO');
-  if (selected && !values.includes(selected)) values.push(selected);
+  const selectedValue = canonicalOutcome(selected);
+  if (selectedValue && !values.includes(selectedValue)) values.push(selectedValue);
   select.replaceChildren(...values.map((value) => {
     const option = document.createElement('option');
-    option.value = value === 'YES_NO' ? 'Yes & No（双向）' : value;
+    option.value = value;
+    option.textContent = value === 'YES_NO' ? 'Yes & No（双向）' : value;
     return option;
   }));
-  select.value = selected && values.includes(selected) ? selected : values[0];
+  select.value = selectedValue && values.includes(selectedValue) ? selectedValue : values[0];
 }
 
 function renumberMarkets() {

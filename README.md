@@ -133,6 +133,7 @@ python -m predict_mm.main --config config.toml
 
 - 每个 `[[markets]]` 中的 `quote_size`：该市场每次挂单的数量；
 - `cancel_after_seconds`：订单保留多少秒后撤销；
+- 当盘口价格逼近某笔挂单至只剩 1 个 tick 时，机器人会在下一次轮询（默认最多 2 秒）撤单，并按距离最新盘口 2 个 tick 的规则重新报价；
 - 每个市场的价格 tick 会由 API 返回的 `decimalPrecision` 自动识别；例如精度为 `2` 时，机器人按 `0.01` 价格档位报价；
 - `max_position_per_market`：单个市场允许的最大仓位；
 - `max_total_position`：所有市场合计允许的最大仓位；

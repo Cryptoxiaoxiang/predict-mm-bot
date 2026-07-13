@@ -55,6 +55,7 @@ class MarketConfig:
     id: str
     enabled: bool = True
     outcome: str = "YES"
+    quote_size: Decimal | None = None
     token_id: str | None = None
     fee_rate_bps: int | None = None
     is_neg_risk: bool | None = None
@@ -82,7 +83,7 @@ def load_config(path: str | Path) -> BotConfig:
     with Path(path).open("rb") as file:
         raw = tomllib.load(file)
 
-    markets = [MarketConfig(**market) for market in raw.get("markets", [])]
+    markets = [_market(market) for market in raw.get("markets", [])]
     config = BotConfig(
         dry_run=bool(raw.get("dry_run", True)),
         poll_interval_seconds=float(raw.get("poll_interval_seconds", 2)),
@@ -123,6 +124,13 @@ def _strategy(raw: dict) -> StrategyConfig:
         max_spread_to_quote=_decimal(raw.get("max_spread_to_quote"), "0.20"),
         min_spread_to_quote=_decimal(raw.get("min_spread_to_quote"), "0.006"),
     )
+
+
+def _market(raw: dict) -> MarketConfig:
+    market = dict(raw)
+    if market.get("quote_size") is not None:
+        market["quote_size"] = _decimal(market["quote_size"], "1")
+    return MarketConfig(**market)
 
 
 def _risk(raw: dict) -> RiskConfig:

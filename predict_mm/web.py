@@ -344,7 +344,7 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
 
 def _validate_setup(payload: SetupPayload) -> None:
     for market in payload.markets:
-        if "predict.fun/market/" in market.market_id.lower():
+        if _is_predict_market_url(market.market_id):
             raise HTTPException(
                 status_code=422,
                 detail="请先点击“识别网址”并选择正确市场，再保存配置。",
@@ -378,6 +378,14 @@ def _market_slug_from_url(value: str) -> str:
     if not slug:
         raise ValueError("网址中没有找到市场名称。")
     return slug
+
+
+def _is_predict_market_url(value: str) -> bool:
+    try:
+        _market_slug_from_url(value)
+    except ValueError:
+        return False
+    return True
 
 
 def _search_query_from_slug(slug: str) -> str:

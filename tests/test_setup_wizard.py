@@ -24,3 +24,4 @@ def test_build_config_text_defaults_to_dry_run() -> None:
     assert 'id = "123"' in text
     assert 'outcome = "YES"' in text
     assert 'quote_size = "1.0"' in text
+    assert "cancel_after_seconds = 8" in text

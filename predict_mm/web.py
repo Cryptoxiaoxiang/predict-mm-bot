@@ -1,3 +1,4 @@
+/opt/homebrew/Library/Homebrew/cmd/shellenv.sh: line 9: /bin/ps: Operation not permitted
 from __future__ import annotations
 
 import argparse
@@ -34,18 +35,20 @@ class MarketPayload(BaseModel):
 
 
 class SetupPayload(BaseModel):
-    api_base_url: str = "https://api.predict.fun"
-    api_key: str = ""
-    jwt_token: str = ""
-    private_key: str = ""
-    predict_account_address: str = ""
-    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     dry_run: bool = False
     emergency_exit_on_buy_fill: bool = True
     markets: list[MarketPayload] = Field(min_length=1, max_length=50)
     cancel_after_seconds: str = "8"
     max_position_per_market: str = "10.0"
     max_total_position: str = "50.0"
+
+
+class AccountPayload(BaseModel):
+    api_key: str = ""
+    jwt_token: str = ""
+    private_key: str = ""
+    predict_account_address: str = ""
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
 
 class MemoryLogHandler(logging.Handler):
@@ -110,6 +113,7 @@ class DashboardState:
             "jwt_token_set": bool(settings.jwt_token),
             "private_key_set": bool(settings.private_key),
             "account_address": settings.predict_account_address or "",
+            "log_level": settings.log_level,
         }
 
     async def start(self) -> None:
@@ -203,14 +207,12 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
         ]
         max_quote_size = max(Decimal(market.quote_size) for market in market_answers)
         answers = WizardAnswers(
-            api_base_url=payload.api_base_url.strip() or "https://api.predict.fun",
-            api_key=payload.api_key.strip() or current.api_key or "",
-            jwt_token=payload.jwt_token.strip() or current.jwt_token or "",
-            private_key=payload.private_key.strip() or current.private_key or "",
-            predict_account_address=payload.predict_account_address.strip()
-            or current.predict_account_address
-            or "",
-            log_level=payload.log_level,
+            api_base_url=current.api_base_url,
+            api_key=current.api_key or "",
+            jwt_token=current.jwt_token or "",
+            private_key=current.private_key or "",
+            predict_account_address=current.predict_account_address or "",
+            log_level=current.log_level,
             dry_run=payload.dry_run,
             emergency_exit_on_buy_fill=payload.emergency_exit_on_buy_fill,
             market_id=market_answers[0].market_id,
@@ -220,10 +222,28 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
             max_position_per_market=payload.max_position_per_market.strip(),
             max_total_position=payload.max_total_position.strip(),
         )
-        state.env_path.write_text(build_env_text(answers), encoding="utf-8")
         state.config_path.write_text(build_config_text(answers, markets=market_answers), encoding="utf-8")
+        return {"ok": True, "message": "市场与风控配置已保存。"}
+
+    @app.post("/api/account")
+    async def account(payload: AccountPayload) -> dict[str, object]:
+        current = Settings.from_env()
+        answers = WizardAnswers(
+            api_base_url=current.api_base_url,
+            api_key=payload.api_key.strip() or current.api_key or "",
+            jwt_token=payload.jwt_token.strip() or current.jwt_token or "",
+            private_key=payload.private_key.strip() or current.private_key or "",
+            predict_account_address=payload.predict_account_address.strip()
+            or current.predict_account_address
+            or "",
+            log_level=payload.log_level,
+        )
+        state.env_path.write_text(build_env_text(answers), encoding="utf-8")
         _apply_settings_to_process(answers)
-        return {"ok": True, "message": "配置已保存。"}
+        message = "账户设置已保存。"
+        if state.running:
+            message += " 机器人会在下次启动时使用新的账户设置。"
+        return {"ok": True, "message": message}
 
     @app.post("/api/start")
     async def start() -> dict[str, object]:

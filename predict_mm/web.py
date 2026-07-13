@@ -282,22 +282,25 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
             raise HTTPException(status_code=422, detail=str(error)) from error
 
         settings = Settings.from_env()
-        if not settings.api_key:
-            raise HTTPException(
-                status_code=400,
-                detail="请先在“账户设置”保存 API Key，才能从市场网址识别 Market ID。",
-            )
-
         client = PredictClient(settings=settings, dry_run=False)
+        api_search_failed = False
         try:
-            markets = await client.search_markets(slug)
+            markets: list[dict] = []
+            if settings.api_key:
+                try:
+                    markets = await client.search_markets(slug)
+                    if not markets:
+                        markets = await client.search_markets(_search_query_from_slug(slug))
+                except Exception as error:  # noqa: BLE001
+                    api_search_failed = True
+                    logging.getLogger("predict-mm").warning("官方市场搜索不可用，改用公开页面: %s", error)
             if not markets:
-                markets = await client.search_markets(_search_query_from_slug(slug))
+                markets = await client.markets_from_public_page(payload.market_url, slug)
         except Exception as error:  # noqa: BLE001
             logging.getLogger("predict-mm").warning("无法从市场网址识别 ID: %s", error)
             raise HTTPException(
                 status_code=502,
-                detail="未能查询 Predict.fun 市场。请检查 API Key、网络后重试，或直接填写数字 Market ID。",
+                detail="未能读取 Predict.fun 市场页面。请检查网络后重试，或直接填写数字 Market ID。",
             ) from error
         finally:
             await client.close()
@@ -307,7 +310,13 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
             "ok": True,
             "market_id": None,
             "matches": matches,
-            "message": "请选择要挂单的市场和选项。" if matches else "未找到匹配市场，请尝试直接填写数字 Market ID。",
+            "message": (
+                "官方搜索接口不可用，已从公开页面读取市场。请选择要挂单的市场和选项；实盘前仍需确认 API Key 有效。"
+                if matches and api_search_failed
+                else "请选择要挂单的市场和选项。"
+                if matches
+                else "未找到匹配市场，请尝试直接填写数字 Market ID。"
+            ),
         }
 
     @app.post("/api/start")
@@ -388,7 +397,12 @@ def _search_query_from_slug(slug: str) -> str:
 
 def _market_lookup_result(market: dict) -> dict[str, object]:
     outcomes: list[str] = []
-    for outcome in market.get("outcomes") or []:
+    raw_outcomes = market.get("outcomes") or []
+    if isinstance(raw_outcomes, dict):
+        raw_outcomes = raw_outcomes.get("edges") or []
+    for outcome in raw_outcomes:
+        if isinstance(outcome, dict) and isinstance(outcome.get("node"), dict):
+            outcome = outcome["node"]
         if not isinstance(outcome, dict):
             continue
         name = str(outcome.get("name") or outcome.get("outcome") or outcome.get("title") or "").strip()

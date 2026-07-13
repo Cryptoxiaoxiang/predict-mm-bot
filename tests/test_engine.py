@@ -56,7 +56,7 @@ def test_buy_fill_cancels_market_and_creates_emergency_sell() -> None:
     assert post_only is False
 
 
-def test_active_order_markets_summarizes_open_orders() -> None:
+def test_active_orders_exposes_each_open_order() -> None:
     engine = MarketMakerEngine(
         config=BotConfig(markets=[MarketConfig(id="market-1")]),
         client=EmergencyClient(),  # type: ignore[arg-type]
@@ -74,14 +74,25 @@ def test_active_order_markets_summarizes_open_orders() -> None:
         created_at=0,
     )
 
-    assert engine.active_order_markets() == [
+    assert engine.active_orders() == [
         {
+            "order_id": "buy",
             "market_id": "market-1",
+            "side": "buy",
             "outcome": "YES",
-            "buy_orders": 1,
-            "sell_orders": 1,
-            "emergency_exit_orders": 0,
-        }
+            "price": "0.50",
+            "size": "1",
+            "is_emergency_exit": False,
+        },
+        {
+            "order_id": "sell",
+            "market_id": "market-1",
+            "side": "sell",
+            "outcome": "YES",
+            "price": "0.60",
+            "size": "1",
+            "is_emergency_exit": False,
+        },
     ]
 
 

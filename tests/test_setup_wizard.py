@@ -18,10 +18,10 @@ def test_build_env_text_does_not_include_api_secret() -> None:
     assert "PREDICT_CHAIN_ID" not in text
 
 
-def test_build_config_text_defaults_to_dry_run() -> None:
+def test_build_config_text_defaults_to_live_trading() -> None:
     text = build_config_text(WizardAnswers(market_id="123", outcome="YES"))
 
-    assert "dry_run = true" in text
+    assert "dry_run = false" in text
     assert 'id = "123"' in text
     assert 'outcome = "YES"' in text
     assert 'quote_size = "1.0"' in text
@@ -29,6 +29,7 @@ def test_build_config_text_defaults_to_dry_run() -> None:
     assert "is_neg_risk" not in text
     assert "is_yield_bearing" not in text
     assert "fee_rate_bps" not in text
+    assert "emergency_exit_on_buy_fill = true" in text
 
 
 def test_build_config_text_supports_multiple_markets() -> None:

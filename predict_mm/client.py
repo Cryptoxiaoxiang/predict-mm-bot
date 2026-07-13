@@ -35,7 +35,9 @@ class PredictClient:
     def _headers(self) -> dict[str, str]:
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         if self.settings.api_key:
-            headers["Authorization"] = f"Bearer {self.settings.api_key}"
+            headers["x-api-key"] = self.settings.api_key
+        if self.settings.jwt_token:
+            headers["Authorization"] = f"Bearer {self.settings.jwt_token}"
         return headers
 
     async def get_orderbook(self, market_id: str) -> OrderBook:

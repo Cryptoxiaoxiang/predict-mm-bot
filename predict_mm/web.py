@@ -41,6 +41,7 @@ class SetupPayload(BaseModel):
     predict_account_address: str = ""
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     dry_run: bool = True
+    emergency_exit_on_buy_fill: bool = False
     markets: list[MarketPayload] = Field(min_length=1, max_length=50)
     cancel_after_seconds: str = "8"
     max_position_per_market: str = "10.0"
@@ -103,6 +104,7 @@ class DashboardState:
             "max_position_per_market": str(config.risk.max_position_per_market) if config else "10.0",
             "max_total_position": str(config.risk.max_total_position) if config else "50.0",
             "cancel_after_seconds": config.cancel_after_seconds if config else 8,
+            "emergency_exit_on_buy_fill": config.emergency_exit_on_buy_fill if config else False,
             "api_key_set": bool(settings.api_key),
             "jwt_token_set": bool(settings.jwt_token),
             "private_key_set": bool(settings.private_key),
@@ -206,6 +208,7 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
             or "",
             log_level=payload.log_level,
             dry_run=payload.dry_run,
+            emergency_exit_on_buy_fill=payload.emergency_exit_on_buy_fill,
             market_id=market_answers[0].market_id,
             outcome=market_answers[0].outcome,
             quote_size=str(max_quote_size),

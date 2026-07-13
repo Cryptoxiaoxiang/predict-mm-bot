@@ -1,8 +1,9 @@
+/opt/homebrew/Library/Homebrew/cmd/shellenv.sh: line 9: /bin/ps: Operation not permitted
 const form = document.querySelector('#setup-form');
+const accountForm = document.querySelector('#account-form');
 const notice = document.querySelector('#notice');
 const marketsList = document.querySelector('#markets-list');
 const marketTemplate = document.querySelector('#market-template');
-const advancedCard = document.querySelector('.advanced-card');
 let formDirty = false;
 
 function showNotice(message, kind = 'success') {
@@ -18,8 +19,8 @@ async function request(path, options = {}) {
   return data;
 }
 
-function setField(name, value) {
-  const field = form.elements.namedItem(name);
+function setField(name, value, target = form) {
+  const field = target.elements.namedItem(name);
   if (field && value !== undefined && value !== null) field.value = value;
 }
 
@@ -102,13 +103,18 @@ async function refreshStatus() {
     document.querySelector('#start-button').disabled = !status.configured || status.running;
     document.querySelector('#stop-button').disabled = !status.running;
     document.querySelector('#cancel-button').disabled = !status.configured;
-    if (!formDirty && !['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)) {
+    const isEditing = ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName);
+    if (!formDirty && !isEditing) {
       if (markets.length) renderMarkets(markets);
       setField('cancel_after_seconds', status.cancel_after_seconds);
       setField('max_position_per_market', status.max_position_per_market);
       setField('max_total_position', status.max_total_position);
       form.elements.namedItem('dry_run').checked = status.dry_run;
       form.elements.namedItem('emergency_exit_on_buy_fill').checked = status.emergency_exit_on_buy_fill;
+    }
+    if (!isEditing) {
+      setField('predict_account_address', status.account_address, accountForm);
+      setField('log_level', status.log_level, accountForm);
     }
     document.querySelector('#secret-status').textContent = [
       status.api_key_set && 'API Key 已保存',
@@ -138,20 +144,31 @@ document.querySelector('#add-market-button').addEventListener('click', () => {
 });
 form.addEventListener('input', () => { formDirty = true; });
 form.addEventListener('change', () => { formDirty = true; });
-advancedCard.addEventListener('input', () => { formDirty = true; });
-advancedCard.addEventListener('change', () => { formDirty = true; });
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   const values = Object.fromEntries(new FormData(form));
   values.markets = collectMarkets();
   values.dry_run = form.elements.namedItem('dry_run').checked;
   values.emergency_exit_on_buy_fill = form.elements.namedItem('emergency_exit_on_buy_fill').checked;
-  values.api_base_url = 'https://api.predict.fun';
   try {
     const result = await request('/api/setup', {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(values),
     });
     formDirty = false;
+    showNotice(result.message);
+    await refreshStatus();
+  } catch (error) {
+    showNotice(error.message, 'error');
+  }
+});
+
+accountForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const values = Object.fromEntries(new FormData(accountForm));
+  try {
+    const result = await request('/api/account', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(values),
+    });
     showNotice(result.message);
     await refreshStatus();
   } catch (error) {

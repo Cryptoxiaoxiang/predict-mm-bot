@@ -52,6 +52,10 @@ class Quote:
     price: Decimal
     size: Decimal
     outcome: str = "YES"
+    token_id: str | None = None
+    fee_rate_bps: int | None = None
+    is_neg_risk: bool | None = None
+    is_yield_bearing: bool | None = None
 
 
 @dataclass

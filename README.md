@@ -61,6 +61,7 @@ enabled = true
 ```env
 PREDICT_API_BASE_URL=https://api.predict.fun
 PREDICT_API_KEY=
+# 可选预留字段：如果 Predict.fun 只给了 API Key，没有给 Secret，就保持空白
 PREDICT_API_SECRET=
 ```
 

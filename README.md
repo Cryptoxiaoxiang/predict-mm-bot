@@ -61,11 +61,13 @@ enabled = true
 ```env
 PREDICT_API_BASE_URL=https://api.predict.fun
 PREDICT_API_KEY=
-# 可选预留字段：如果 Predict.fun 只给了 API Key，没有给 Secret，就保持空白
-PREDICT_API_SECRET=
+# 可选：实盘创建 / 撤销订单等钱包相关操作需要 JWT Token
+PREDICT_JWT_TOKEN=
 ```
 
 真实密钥不要提交到 GitHub。项目已在 `.gitignore` 中排除 `.env` 和 `config.toml`。
+
+Predict.fun 官方文档当前说明：Mainnet 请求需要 API Key；创建订单、查看个人订单这类钱包相关操作还需要 JWT Token。文档没有要求 API Secret，所以本项目不再保留 API Secret 字段。
 
 ## 安全提醒
 

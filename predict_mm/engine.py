@@ -1,3 +1,4 @@
+/opt/homebrew/Library/Homebrew/cmd/shellenv.sh: line 9: /bin/ps: Operation not permitted
 from __future__ import annotations
 
 import asyncio
@@ -9,7 +10,7 @@ from time import monotonic
 
 from predict_mm.client import PredictClient
 from predict_mm.config import BotConfig
-from predict_mm.models import ManagedOrder, OrderStatus, Side, WalletFillEvent
+from predict_mm.models import ManagedOrder, OrderBook, OrderStatus, Side, WalletFillEvent
 from predict_mm.risk import RiskManager
 from predict_mm.strategy import PassiveMakerStrategy
 
@@ -124,6 +125,8 @@ class MarketMakerEngine:
             if market.id in self._halted_markets:
                 continue
             orderbook = await self.client.get_orderbook(market.id)
+            if self.config.replace_on_orderbook_change:
+                await self._cancel_orders_approached_by_market(market.id, orderbook)
             quotes = self.strategy.build_quotes(market, orderbook)
             if not quotes:
                 logger.info("No safe quote for %s", market.id)
@@ -134,6 +137,39 @@ class MarketMakerEngine:
             for quote in approved:
                 order = await self.client.create_order(quote)
                 self.open_orders[order.order_id] = order
+
+    async def _cancel_orders_approached_by_market(self, market_id: str, orderbook: OrderBook) -> None:
+        """Cancel quotes once the market touch is only one tick away from them."""
+        tick_size = orderbook.tick_size or self.config.strategy.tick_size
+        for order in list(self.open_orders.values()):
+            if (
+                order.status != OrderStatus.OPEN
+                or order.is_emergency_exit
+                or order.quote.market_id != market_id
+            ):
+                continue
+
+            best_price = orderbook.best_bid if order.quote.side == Side.BUY else orderbook.best_ask
+            if best_price is None:
+                continue
+
+            is_approached = (
+                best_price.price <= order.quote.price + tick_size
+                if order.quote.side == Side.BUY
+                else best_price.price >= order.quote.price - tick_size
+            )
+            if not is_approached:
+                continue
+
+            logger.info(
+                "Canceling %s quote %s on %s: market touch %s is within one tick",
+                order.quote.side.value,
+                order.quote.price,
+                market_id,
+                best_price.price,
+            )
+            await self.client.cancel_order(order.order_id)
+            order.status = OrderStatus.CANCELED
 
     async def _cancel_stale_orders(self) -> None:
         for order in list(self.open_orders.values()):

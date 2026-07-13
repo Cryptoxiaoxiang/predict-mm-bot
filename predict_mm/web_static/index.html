@@ -1,3 +1,4 @@
+/opt/homebrew/Library/Homebrew/cmd/shellenv.sh: line 9: /bin/ps: Operation not permitted
 <!doctype html>
 <html lang="zh-CN">
   <head>
@@ -34,14 +35,16 @@
           </div>
           <span id="secret-status" class="muted"></span>
         </div>
-        <div class="form-grid">
-          <label>API Key<input form="setup-form" name="api_key" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
-          <label>JWT Token<input form="setup-form" name="jwt_token" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
-          <label>钱包 Private Key<input form="setup-form" name="private_key" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
-          <label>Predict Account Address<input form="setup-form" name="predict_account_address" placeholder="公开钱包地址" /></label>
-          <label>日志级别<select form="setup-form" name="log_level"><option>INFO</option><option>DEBUG</option><option>WARNING</option><option>ERROR</option></select></label>
-        </div>
-        <button class="primary" form="setup-form" type="submit">保存全部设置</button>
+        <form id="account-form">
+          <div class="form-grid">
+            <label>API Key<input name="api_key" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
+            <label>JWT Token<input name="jwt_token" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
+            <label>钱包 Private Key<input name="private_key" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
+            <label>Predict Account Address<input name="predict_account_address" placeholder="公开钱包地址" /></label>
+            <label>日志级别<select name="log_level"><option>INFO</option><option>DEBUG</option><option>WARNING</option><option>ERROR</option></select></label>
+          </div>
+          <button class="primary" type="submit">保存账户设置</button>
+        </form>
       </section>
 
       <section class="card controls">

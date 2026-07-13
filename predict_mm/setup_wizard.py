@@ -22,6 +22,7 @@ class WizardAnswers:
     is_neg_risk: bool = False
     is_yield_bearing: bool = False
     quote_size: str = "1.0"
+    cancel_after_seconds: str = "8"
     max_position_per_market: str = "10.0"
     max_total_position: str = "50.0"
 
@@ -49,6 +50,7 @@ def run_setup_wizard(config_path: str | Path = "config.toml", env_path: str | Pa
         is_neg_risk=_ask_bool("该市场是否 is_neg_risk？不确定选 no", False),
         is_yield_bearing=_ask_bool("该市场是否 is_yield_bearing？不确定选 no", False),
         quote_size=_ask("单次挂单数量 quote_size", "1.0"),
+        cancel_after_seconds=_ask("订单多少秒后撤单", "8"),
         max_position_per_market=_ask("单市场最大仓位", "10.0"),
         max_total_position=_ask("总最大仓位", "50.0"),
     )
@@ -80,7 +82,7 @@ def build_env_text(answers: WizardAnswers) -> str:
 def build_config_text(answers: WizardAnswers) -> str:
     return f"""dry_run = {_toml_bool(answers.dry_run)}
 poll_interval_seconds = 2.0
-cancel_after_seconds = 8.0
+cancel_after_seconds = {answers.cancel_after_seconds}
 replace_on_orderbook_change = true
 cancel_all_on_start = true
 cancel_all_on_shutdown = true

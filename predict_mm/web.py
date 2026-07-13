@@ -9,6 +9,7 @@ from collections import deque
 from contextlib import asynccontextmanager
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from typing import Literal
 from urllib.parse import unquote, urlparse
 
 from fastapi import FastAPI, HTTPException

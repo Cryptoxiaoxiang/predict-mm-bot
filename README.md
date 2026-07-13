@@ -73,8 +73,6 @@ nohup .venv/bin/python -m predict_mm.web > logs/web-console.log 2>&1 &
 tail -f logs/web-console.log
 ```
 
-`nohup` 不能在 VPS 重启后自动恢复；如果需要服务器重启后也自动恢复，请使用下方 Docker 方式。项目的 Docker 配置已启用自动重启。
-
 第一次打开网页时，先在“账户设置”填写 API Key 等账户信息并点“保存账户设置”；再填写第一个市场的 Market ID、交易方向和风险限制，需要更多市场时点“添加市场”，最后点“保存配置”。机器人会生成两个只保存在服务器上的配置文件：
 
 - `.env`：账户和登录信息；

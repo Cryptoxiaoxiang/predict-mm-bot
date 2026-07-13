@@ -111,7 +111,7 @@ class DashboardState:
             "max_total_position": str(config.risk.max_total_position) if config else "50.0",
             "cancel_after_seconds": config.cancel_after_seconds if config else 8,
             "emergency_exit_on_buy_fill": config.emergency_exit_on_buy_fill if config else True,
-            "open_order_markets": self.engine.active_order_markets() if self.engine else [],
+            "open_orders": self.engine.active_orders() if self.engine else [],
             "api_key_set": bool(settings.api_key),
             "jwt_token_set": bool(settings.jwt_token),
             "private_key_set": bool(settings.private_key),

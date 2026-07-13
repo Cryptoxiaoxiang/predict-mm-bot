@@ -11,7 +11,7 @@
 - Predictfun 注册链接，可以获得10%手续费折扣: https://predict.fun?ref=5BA3F
 - 一台已安装 Python 3.11 或更高版本的电脑；
 - 想要运行的 Predict.fun 市场的 `Market ID`；
-- 只有准备真实交易时，才需要 Predict.fun API Key、JWT Token 和钱包私钥。
+- 只有准备真实交易时，才需要 Predict.fun API Key 和钱包私钥；网页会自动生成 JWT Token。
 
 模拟运行不需要填写钱包私钥，也不会发送真实订单。
 
@@ -97,7 +97,6 @@ python -m predict_mm.main --config config.toml
 第一次测试时，推荐这样填写：
 
 - `API Key`：可暂时留空；
-- `JWT Token`：EOA 钱包可由网页自动生成，无需手动填写；
 - `钱包 Private Key`：使用 EOA 实盘时填写。保存账户设置时，网页会用它在本机/VPS 内存中签署官方动态 message，并自动获取 JWT；私钥不会发送给 Predict.fun 或写入日志；
 - `Predict Account Address`：留空；
 - `是否使用 dry-run 模拟运行`：默认不勾选；勾选后才不会真实下单。
@@ -121,7 +120,7 @@ python -m predict_mm.main --config config.toml
 
 确认模拟运行没有问题后：
 
-1. 在 `.env` 填入 API Key、JWT Token、钱包 Private Key 和 Predict Account Address；
+1. 在网页账户设置填入 API Key 和 EOA 钱包 Private Key；保存时会自动生成 JWT；
 2. 在 `config.toml` 将 `dry_run = true` 改为 `dry_run = false`；
 3. 保持很小的单次挂单数量和仓位上限；
 4. 启动后先到 Predict.fun 页面确认订单和撤单行为是否符合预期。

@@ -629,8 +629,6 @@ class PredictClient:
             "selfTradePrevention": "CANCEL_MAKER",
             "order": signed_order_dict,
         }
-        if post_only:
-            data["reservedBalancePolicy"] = "REJECT_MARKET_ORDER"
         return {"data": data}
 
     def _wallet_fill_event(self, message: dict) -> WalletFillEvent | None:

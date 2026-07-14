@@ -257,6 +257,21 @@ function renderApprovals(result) {
     row.append(label, state);
     return row;
   }));
+  const gasWallet = document.querySelector('#gas-wallet');
+  if (result.gas_wallet_address) {
+    gasWallet.hidden = false;
+    gasWallet.replaceChildren();
+    const balance = document.createElement('strong');
+    balance.textContent = `授权 Gas 余额：${formatBalance(result.gas_balance)} ${result.gas_asset}`;
+    balance.className = Number(result.gas_balance) > 0 ? 'approval-ready' : 'approval-missing';
+    const address = document.createElement('code');
+    address.textContent = result.gas_wallet_address;
+    address.title = '这是 Privy/EOA 签名钱包地址，不是 Predict Account Address';
+    gasWallet.append(balance, document.createTextNode('授权 Gas 钱包地址：'), address);
+  } else {
+    gasWallet.hidden = true;
+    gasWallet.replaceChildren();
+  }
 }
 
 async function refreshApprovals() {
@@ -271,6 +286,7 @@ async function refreshApprovals() {
     approvalStatus.textContent = '检查失败';
     approvalStatus.className = 'approval-missing';
     approvalSteps.replaceChildren();
+    document.querySelector('#gas-wallet').hidden = true;
     showNotice(error.message, 'error');
     return null;
   } finally {

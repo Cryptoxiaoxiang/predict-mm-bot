@@ -128,6 +128,12 @@ class DashboardState:
                 raise ValueError("请先完成网页配置。")
             settings = Settings.from_env()
             config = load_config(self.config_path)
+            if not config.dry_run:
+                approval_status = await self.trade_approval_status()
+                if not approval_status["ready"]:
+                    raise ValueError(
+                        "当前账户缺少交易授权。请展开“账户设置”，先检查并设置交易授权。"
+                    )
             if not self.logging_ready:
                 configure_logging(settings.log_level)
                 logging.getLogger().addHandler(self.log_handler)
@@ -171,7 +177,6 @@ class DashboardState:
         finally:
             await client.close()
 
-
     async def account_balance(self) -> dict[str, str]:
         """Return the configured wallet's raw USDT balance without touching the bot."""
         settings = Settings.from_env()
@@ -184,6 +189,123 @@ class DashboardState:
             "asset": "USDT",
             "balance": format(balance, "f"),
             "account_address": account_address,
+        }
+
+    async def _trade_approval_plan(self) -> tuple[object, list[object]]:
+        """Build the minimal official-SDK approval plan for configured markets."""
+        if not self.configured():
+            raise RuntimeError("请先保存市场配置，再检查交易授权。")
+        settings = Settings.from_env()
+        if not settings.private_key:
+            raise RuntimeError("请先在账户设置中保存钱包 Private Key。")
+        try:
+            from predict_sdk import (  # type: ignore[import-not-found]
+                ApprovalScope,
+                ChainId,
+                OrderBuilder,
+                OrderBuilderOptions,
+            )
+        except ImportError as error:
+            raise RuntimeError("检查交易授权需要安装 Predict.fun 官方 SDK。") from error
+
+        options = (
+            OrderBuilderOptions(predict_account=settings.predict_account_address)
+            if settings.predict_account_address
+            else None
+        )
+        builder = await asyncio.to_thread(
+            OrderBuilder.make,
+            ChainId(settings.chain_id),
+            settings.private_key,
+            options,
+        )
+        config = load_config(self.config_path)
+        client = PredictClient(settings=settings, dry_run=False)
+        steps_by_id: dict[str, object] = {}
+        try:
+            for market in config.enabled_markets:
+                metadata = await client._get_market_metadata(market.id)
+                is_neg_risk = client._optional_bool(
+                    client._first_present(metadata, "isNegRisk", "is_neg_risk")
+                )
+                is_yield_bearing = client._optional_bool(
+                    client._first_present(metadata, "isYieldBearing", "is_yield_bearing")
+                )
+                if is_neg_risk is None or is_yield_bearing is None:
+                    raise RuntimeError(
+                        f"市场 {market.id} 缺少官方授权类型信息，已停止以避免错误授权。"
+                    )
+                steps = builder.get_approval_steps(
+                    ApprovalScope(
+                        operation="TRADE",
+                        is_neg_risk=is_neg_risk,
+                        is_yield_bearing=is_yield_bearing,
+                        side=None,
+                    )
+                )
+                for step in steps:
+                    steps_by_id.setdefault(str(step.id), step)
+        finally:
+            await client.close()
+        return builder, list(steps_by_id.values())
+
+    async def trade_approval_status(self) -> dict[str, object]:
+        """Read approval state only; this never signs or submits a transaction."""
+        builder, steps = await self._trade_approval_plan()
+        checks = await builder.check_approvals_async(steps)
+        rows = [
+            {
+                "id": str(check.step.id),
+                "type": str(check.step.type),
+                "label": str(check.step.label),
+                "satisfied": bool(check.satisfied),
+            }
+            for check in checks
+        ]
+        missing = sum(not row["satisfied"] for row in rows)
+        return {
+            "ok": True,
+            "ready": missing == 0,
+            "required": len(rows),
+            "missing": missing,
+            "steps": rows,
+        }
+
+    async def set_trade_approvals(self) -> dict[str, object]:
+        """Submit only missing approval transactions after the UI confirmation."""
+        if self.running:
+            raise RuntimeError("请先停止机器人，再设置交易授权。")
+        builder, steps = await self._trade_approval_plan()
+        checks = await builder.check_approvals_async(steps)
+        missing_steps = [check.step for check in checks if not check.satisfied]
+        if not missing_steps:
+            return {
+                "ok": True,
+                "ready": True,
+                "message": "交易授权已经完整，无需重复设置。",
+            }
+        try:
+            report = await builder.run_approvals_async(
+                missing_steps,
+                skip_satisfied=True,
+                stop_on_error=True,
+            )
+        except Exception as error:  # noqa: BLE001
+            raise RuntimeError(
+                f"官方 SDK 设置交易授权失败：{error}"
+            ) from error
+        if not report.success:
+            failed = [
+                str(result.step.id)
+                for result in report.steps
+                if str(result.status).lower() == "failed"
+            ]
+            suffix = f"（{', '.join(failed)}）" if failed else ""
+            raise RuntimeError(f"部分交易授权未成功{suffix}，请查看服务器日志中的原始原因。")
+        return {
+            "ok": True,
+            "ready": True,
+            "message": "交易授权已设置完成。此操作没有创建订单。",
         }
 
 
@@ -210,6 +332,20 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
     async def balance() -> dict[str, object]:
         try:
             return {"ok": True, **await state.account_balance()}
+        except RuntimeError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.get("/api/approvals")
+    async def approvals() -> dict[str, object]:
+        try:
+            return await state.trade_approval_status()
+        except RuntimeError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.post("/api/approvals")
+    async def set_approvals() -> dict[str, object]:
+        try:
+            return await state.set_trade_approvals()
         except RuntimeError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
@@ -355,7 +491,7 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
     async def start() -> dict[str, object]:
         try:
             await state.start()
-        except ValueError as error:
+        except (ValueError, RuntimeError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         return {"ok": True, "message": "机器人正在启动。"}
 

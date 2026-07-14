@@ -256,6 +256,9 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
         current = Settings.from_env()
         api_key = payload.api_key.strip() or current.api_key or ""
         private_key = payload.private_key.strip() or current.private_key or ""
+        predict_account_address = (
+            payload.predict_account_address.strip() or current.predict_account_address or ""
+        )
         jwt_token = current.jwt_token or ""
         generated_jwt = False
         if private_key:
@@ -266,7 +269,11 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
                 dry_run=False,
             )
             try:
-                jwt_token = await client.create_eoa_jwt(private_key)
+                jwt_token = (
+                    await client.create_predict_account_jwt(private_key, predict_account_address)
+                    if predict_account_address
+                    else await client.create_eoa_jwt(private_key)
+                )
                 generated_jwt = True
             except RuntimeError as error:
                 raise HTTPException(status_code=400, detail=str(error)) from error
@@ -283,16 +290,18 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
             api_key=api_key,
             jwt_token=jwt_token,
             private_key=private_key,
-            predict_account_address=payload.predict_account_address.strip()
-            or current.predict_account_address
-            or "",
+            predict_account_address=predict_account_address,
             log_level=payload.log_level,
         )
         state.env_path.write_text(build_env_text(answers), encoding="utf-8")
         _apply_settings_to_process(answers)
         message = "账户设置已保存。"
         if generated_jwt:
-            message += " 已使用 EOA 钱包本地签名并自动生成 JWT。"
+            message += (
+                " 已使用 Predict Account 的 Privy Wallet 本地签名并自动生成 JWT。"
+                if predict_account_address
+                else " 已使用 EOA 钱包本地签名并自动生成 JWT。"
+            )
         if state.running:
             message += " 机器人会在下次启动时使用新的账户设置。"
         return {"ok": True, "message": message}

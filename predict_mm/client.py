@@ -6,12 +6,12 @@ import html
 import json
 import logging
 import re
-import urllib.error
-import urllib.parse
 import urllib.request
 from decimal import Decimal
 from time import monotonic
 from uuid import uuid4
+
+import requests
 
 from predict_mm.config import Settings
 from predict_mm.models import Level, ManagedOrder, OrderBook, OrderStatus, Quote, Side, WalletFillEvent
@@ -354,7 +354,7 @@ class PredictClient:
         for attempt in range(3):
             try:
                 return await asyncio.to_thread(self._request_sync, method, path, payload, query)
-            except urllib.error.URLError:
+            except requests.RequestException:
                 if attempt == 2:
                     raise
                 await asyncio.sleep(0.25 * (2**attempt))
@@ -367,37 +367,31 @@ class PredictClient:
         payload: dict | None = None,
         query: dict[str, object] | None = None,
     ) -> dict:
-        body = None
-        if payload is not None:
-            body = json.dumps(payload).encode("utf-8")
         url = f"{self.base_url}{path}"
-        if query:
-            clean_query = {
-                key: value
-                for key, value in query.items()
-                if value is not None and value != ""
-            }
-            if clean_query:
-                url = f"{url}?{urllib.parse.urlencode(clean_query)}"
-        request = urllib.request.Request(
-            url,
-            data=body,
-            method=method,
-            headers=self._headers(),
-        )
+        clean_query = {
+            key: value
+            for key, value in (query or {}).items()
+            if value is not None and value != ""
+        }
+        request_options: dict[str, object] = {
+            "headers": self._headers(),
+            "params": clean_query or None,
+            "timeout": 10,
+        }
+        if payload is not None:
+            request_options["json"] = payload
+
+        # Predict.fun 的官方 Python 文档使用 requests 访问认证和交易接口。
+        # 采用相同客户端也可避免 urllib 的请求指纹被站点防护误判。
         try:
-            with urllib.request.urlopen(request, timeout=10) as response:
-                raw = response.read()
-        except urllib.error.HTTPError as error:
-            # urllib raises before exposing a JSON error response. Preserve the
-            # service's human-readable explanation so the UI can distinguish an
-            # invalid signature/key from a connectivity failure.  Only a short,
-            # whitespace-normalised message is surfaced; request credentials are
-            # never included in the exception text.
-            raw_error = error.read().decode("utf-8", errors="replace")
+            response = requests.request(method, url, **request_options)
+        except requests.RequestException:
+            raise
+
+        if response.status_code >= 400:
             try:
-                parsed_error = json.loads(raw_error)
-            except json.JSONDecodeError:
+                parsed_error = response.json()
+            except ValueError:
                 parsed_error = {}
             error_data = self._data(parsed_error) if isinstance(parsed_error, dict) else {}
             detail = next(
@@ -411,9 +405,18 @@ class PredictClient:
             detail = re.sub(r"\s+", " ", detail)[:300]
             suffix = f"：{detail}" if detail else ""
             raise RuntimeError(
-                f"Predict.fun 拒绝了 {method} {path} 请求（HTTP {error.code}）{suffix}"
-            ) from error
-        return json.loads(raw.decode("utf-8")) if raw else {}
+                f"Predict.fun 拒绝了 {method} {path} 请求（HTTP {response.status_code}）{suffix}"
+            )
+
+        if not response.content:
+            return {}
+        try:
+            result = response.json()
+        except ValueError as error:
+            raise RuntimeError(f"Predict.fun 的 {method} {path} 响应不是有效 JSON。") from error
+        if not isinstance(result, dict):
+            raise RuntimeError(f"Predict.fun 的 {method} {path} 响应格式不正确。")
+        return result
 
     def _markets_from_public_page_sync(self, market_url: str, slug: str) -> list[dict]:
         request = urllib.request.Request(

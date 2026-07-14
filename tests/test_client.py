@@ -262,6 +262,33 @@ def test_real_order_requires_sdk_inputs() -> None:
         raise AssertionError("expected missing token_id to block real order creation")
 
 
+def test_signed_order_keeps_zero_valued_signature_type() -> None:
+    client = PredictClient(Settings(), dry_run=False)
+
+    payload = client._signed_order_to_api_dict(
+        {
+            "salt": "1",
+            "maker": "0xmaker",
+            "signer": "0xsigner",
+            "taker": "0xtaker",
+            "token_id": "123",
+            "maker_amount": "24900000000000000000",
+            "taker_amount": "100000000000000000000",
+            "expiration": "4102444800",
+            "nonce": "0",
+            "fee_rate_bps": "0",
+            "side": 0,
+            "signature_type": 0,
+            "signature": "0xsigned",
+        },
+        "0xhash",
+    )
+
+    assert payload["side"] == 0
+    assert payload["signatureType"] == 0
+    assert payload["feeRateBps"] == "0"
+
+
 def test_quote_metadata_can_be_completed_from_market_response() -> None:
     class StubClient(PredictClient):
         async def _request(self, method, path, payload=None, query=None):  # type: ignore[no-untyped-def]

@@ -313,6 +313,9 @@ def test_limit_order_uses_wei_price_in_rest_payload() -> None:
     payload = client._build_signed_limit_order_payload(quote)
 
     assert payload["data"]["pricePerShare"] == "249000000000000000"
+    assert payload["data"]["strategy"] == "LIMIT"
+    assert payload["data"]["isPostOnly"] is True
+    assert "reservedBalancePolicy" not in payload["data"]
     assert payload["data"]["order"]["makerAmount"] == "24900000000000000000"
     assert payload["data"]["order"]["takerAmount"] == "100000000000000000000"
 

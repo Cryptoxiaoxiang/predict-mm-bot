@@ -44,6 +44,21 @@
             <p class="details-note">保存时会自动生成 JWT：若填写 Predict Account Address，会使用该账户设置中导出的 Privy Wallet 私钥生成智能钱包签名；否则使用 EOA 私钥。私钥不会写入日志。</p>
             <button class="primary" type="submit">保存账户设置</button>
           </form>
+          <section class="approval-panel" aria-labelledby="approval-heading">
+            <div class="section-heading">
+              <div>
+                <h3 id="approval-heading">交易授权</h3>
+                <p>实盘下单前需要。检查只读取链上状态；设置授权会发送链上交易，但不会创建订单。</p>
+              </div>
+              <strong id="approval-status" class="muted">尚未检查</strong>
+            </div>
+            <div id="approval-steps" class="approval-steps" aria-live="polite"></div>
+            <div class="button-row">
+              <button id="check-approvals" class="secondary" type="button">检查交易授权</button>
+              <button id="set-approvals" class="danger" type="button">设置交易授权</button>
+            </div>
+            <p class="details-note">无需预先给钱包充值 BNB。若官方 SDK 实际返回 Gas 不足，页面会显示原始错误，再按提示处理。</p>
+          </section>
         </div>
       </details>
 

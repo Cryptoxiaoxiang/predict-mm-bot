@@ -3,7 +3,12 @@ const accountForm = document.querySelector('#account-form');
 const notice = document.querySelector('#notice');
 const marketsList = document.querySelector('#markets-list');
 const marketTemplate = document.querySelector('#market-template');
+const approvalStatus = document.querySelector('#approval-status');
+const approvalSteps = document.querySelector('#approval-steps');
+const checkApprovalsButton = document.querySelector('#check-approvals');
+const setApprovalsButton = document.querySelector('#set-approvals');
 let formDirty = false;
+let approvalActionRunning = false;
 
 function showNotice(message, kind = 'success') {
   notice.hidden = false;
@@ -236,6 +241,43 @@ async function refreshBalance() {
   }
 }
 
+function renderApprovals(result) {
+  approvalStatus.textContent = result.ready
+    ? '授权完整'
+    : `缺少 ${result.missing} 项授权`;
+  approvalStatus.className = result.ready ? 'approval-ready' : 'approval-missing';
+  approvalSteps.replaceChildren(...(result.steps || []).map((step) => {
+    const row = document.createElement('div');
+    row.className = 'approval-step';
+    const label = document.createElement('span');
+    label.textContent = step.type === 'ERC20_ALLOWANCE' ? 'USDT 交易额度' : '预测份额交易权限';
+    const state = document.createElement('strong');
+    state.textContent = step.satisfied ? '已授权' : '待授权';
+    state.className = step.satisfied ? 'approval-ready' : 'approval-missing';
+    row.append(label, state);
+    return row;
+  }));
+}
+
+async function refreshApprovals() {
+  checkApprovalsButton.disabled = true;
+  approvalStatus.textContent = '检查中…';
+  approvalStatus.className = 'muted';
+  try {
+    const result = await request('/api/approvals');
+    renderApprovals(result);
+    return result;
+  } catch (error) {
+    approvalStatus.textContent = '检查失败';
+    approvalStatus.className = 'approval-missing';
+    approvalSteps.replaceChildren();
+    showNotice(error.message, 'error');
+    return null;
+  } finally {
+    checkApprovalsButton.disabled = approvalActionRunning;
+  }
+}
+
 async function refreshStatus() {
   try {
     const status = await request('/api/status');
@@ -250,6 +292,7 @@ async function refreshStatus() {
     document.querySelector('#start-button').disabled = !status.configured || status.running;
     document.querySelector('#stop-button').disabled = !status.running;
     document.querySelector('#cancel-button').disabled = !status.configured;
+    setApprovalsButton.disabled = status.running || approvalActionRunning;
     const isEditing = ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName);
     if (!formDirty && !isEditing) {
       if (markets.length) renderMarkets(markets);
@@ -321,8 +364,34 @@ accountForm.addEventListener('submit', async (event) => {
     });
     showNotice(result.message);
     await refreshStatus();
+    await refreshApprovals();
   } catch (error) {
     showNotice(error.message, 'error');
+  }
+});
+
+checkApprovalsButton.addEventListener('click', refreshApprovals);
+setApprovalsButton.addEventListener('click', async () => {
+  const confirmed = confirm(
+    '设置交易授权会使用已保存的 Privy/EOA 私钥发送链上授权交易，可能产生网络 Gas 费用，但不会创建订单。是否继续？',
+  );
+  if (!confirmed) return;
+  approvalActionRunning = true;
+  checkApprovalsButton.disabled = true;
+  setApprovalsButton.disabled = true;
+  approvalStatus.textContent = '正在设置…';
+  try {
+    const result = await request('/api/approvals', {method: 'POST'});
+    showNotice(result.message);
+    await refreshApprovals();
+  } catch (error) {
+    approvalStatus.textContent = '设置失败';
+    approvalStatus.className = 'approval-missing';
+    showNotice(error.message, 'error');
+  } finally {
+    approvalActionRunning = false;
+    checkApprovalsButton.disabled = false;
+    await refreshStatus();
   }
 });
 

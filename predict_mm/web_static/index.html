@@ -53,11 +53,12 @@
               <strong id="approval-status" class="muted">尚未检查</strong>
             </div>
             <div id="approval-steps" class="approval-steps" aria-live="polite"></div>
+            <div id="gas-wallet" class="gas-wallet" hidden></div>
             <div class="button-row">
               <button id="check-approvals" class="secondary" type="button">检查交易授权</button>
               <button id="set-approvals" class="danger" type="button">设置交易授权</button>
             </div>
-            <p class="details-note">无需预先给钱包充值 BNB。若官方 SDK 实际返回 Gas 不足，页面会显示原始错误，再按提示处理。</p>
+            <p class="details-note">程序化设置授权由 Privy 签名钱包（EOA 模式则为 EOA 钱包）支付 BNB Chain Gas。网页交易可能使用不同的代付流程。请按上方检查结果操作，不要把 Gas 误转到 Predict Account Address。</p>
           </section>
         </div>
       </details>

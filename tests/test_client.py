@@ -289,6 +289,34 @@ def test_signed_order_keeps_zero_valued_signature_type() -> None:
     assert payload["feeRateBps"] == "0"
 
 
+def test_limit_order_uses_wei_price_in_rest_payload() -> None:
+    client = PredictClient(
+        Settings(
+            api_key="api-key",
+            jwt_token="jwt",
+            private_key="0x" + "1" * 64,
+        ),
+        dry_run=False,
+    )
+    quote = Quote(
+        market_id="631321",
+        side=Side.BUY,
+        price=Decimal("0.249"),
+        size=Decimal("100"),
+        outcome="Yes",
+        token_id="123",
+        fee_rate_bps=200,
+        is_neg_risk=False,
+        is_yield_bearing=True,
+    )
+
+    payload = client._build_signed_limit_order_payload(quote)
+
+    assert payload["data"]["pricePerShare"] == "249000000000000000"
+    assert payload["data"]["order"]["makerAmount"] == "24900000000000000000"
+    assert payload["data"]["order"]["takerAmount"] == "100000000000000000000"
+
+
 def test_quote_metadata_can_be_completed_from_market_response() -> None:
     class StubClient(PredictClient):
         async def _request(self, method, path, payload=None, query=None):  # type: ignore[no-untyped-def]

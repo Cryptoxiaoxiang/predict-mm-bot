@@ -619,7 +619,11 @@ class PredictClient:
         signed_order = builder.sign_typed_data_order(typed_data)
         signed_order_dict = self._signed_order_to_api_dict(signed_order, order_hash)
         data = {
-            "pricePerShare": str(quote.price),
+            # Predict's REST API expects this field in 18-decimal integer units,
+            # matching the SDK's ``price_per_share`` output. Sending a display
+            # decimal such as "0.249" passes JSON validation but causes order
+            # creation to fail inside the API.
+            "pricePerShare": str(amounts.price_per_share),
             "strategy": "LIMIT",
             "isPostOnly": post_only,
             "selfTradePrevention": "CANCEL_MAKER",

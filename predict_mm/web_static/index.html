@@ -37,11 +37,11 @@
           <form id="account-form">
             <div class="form-grid">
               <label>API Key<input name="api_key" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
-              <label>钱包 Private Key<input name="private_key" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
-              <label>Predict Account Address<input name="predict_account_address" placeholder="公开钱包地址" /></label>
+              <label>钱包 Private Key<input name="private_key" type="password" autocomplete="off" placeholder="EOA 私钥；Predict Account 请填 Privy 导出的私钥" /></label>
+              <label>Predict Account Address<input name="predict_account_address" placeholder="使用 Predict Account 时填写存款地址；EOA 留空" /></label>
               <label>日志级别<select name="log_level"><option>INFO</option><option>DEBUG</option><option>WARNING</option><option>ERROR</option></select></label>
             </div>
-            <p class="details-note">保存时会自动生成 JWT：机器人只会在本机/VPS 内存中使用 EOA 私钥签名；私钥不会发送给 Predict.fun 或写入日志。</p>
+            <p class="details-note">保存时会自动生成 JWT：若填写 Predict Account Address，会使用该账户设置中导出的 Privy Wallet 私钥生成智能钱包签名；否则使用 EOA 私钥。私钥不会写入日志。</p>
             <button class="primary" type="submit">保存账户设置</button>
           </form>
         </div>

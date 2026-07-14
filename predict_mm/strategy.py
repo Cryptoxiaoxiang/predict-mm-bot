@@ -17,12 +17,16 @@ class PassiveMakerStrategy:
         if not best_bid or not best_ask or spread is None:
             return []
 
-        if spread < self.config.min_spread_to_quote:
+        tick_size = orderbook.tick_size or self.config.tick_size
+        # A fixed minimum spread incorrectly rejects liquid 0.001-tick markets
+        # whose best bid and ask are one tick apart. Quotes are placed away from
+        # the touch below, so the narrowest valid spread is the market tick.
+        effective_min_spread = min(self.config.min_spread_to_quote, tick_size)
+        if spread < effective_min_spread:
             return []
         if spread > self.config.max_spread_to_quote:
             return []
 
-        tick_size = orderbook.tick_size or self.config.tick_size
         edge = tick_size * Decimal(self.config.min_edge_ticks)
         if self.config.join_best_price:
             raw_bid = best_bid.price

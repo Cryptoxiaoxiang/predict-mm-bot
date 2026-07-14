@@ -40,15 +40,18 @@ def test_strategy_builds_both_binary_choices_only_when_requested() -> None:
     ]
 
 
-def test_strategy_skips_tight_spread() -> None:
+def test_strategy_accepts_one_tick_spread_when_quote_stays_away() -> None:
     strategy = PassiveMakerStrategy(StrategyConfig(min_spread_to_quote=Decimal("0.006")))
     book = OrderBook(
         market_id="m1",
-        bids=[Level(Decimal("0.499"), Decimal("100"))],
-        asks=[Level(Decimal("0.502"), Decimal("100"))],
+        bids=[Level(Decimal("0.251"), Decimal("100"))],
+        asks=[Level(Decimal("0.252"), Decimal("100"))],
+        tick_size=Decimal("0.001"),
     )
 
-    assert strategy.build_quotes(MarketConfig(id="m1"), book) == []
+    quotes = strategy.build_quotes(MarketConfig(id="m1", outcome="YES"), book)
+
+    assert [quote.price for quote in quotes] == [Decimal("0.249")]
 
 
 def test_strategy_uses_market_tick_size() -> None:

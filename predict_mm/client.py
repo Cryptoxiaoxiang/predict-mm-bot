@@ -147,6 +147,45 @@ class PredictClient:
             raise RuntimeError("Predict.fun 未返回 JWT Token。")
         return str(token)
 
+    async def create_predict_account_jwt(
+        self, private_key: str, predict_account_address: str
+    ) -> str:
+        """Create a JWT for a Predict Account (Kernel smart wallet)."""
+        self._require_api_key()
+        auth_message_response = await self._request("GET", "/v1/auth/message")
+        message = str(self._data(auth_message_response).get("message") or "")
+        if not message:
+            raise RuntimeError("Predict.fun 未返回用于签名的认证消息。")
+        try:
+            signature = await asyncio.to_thread(
+                self._sign_predict_account_auth_message,
+                private_key,
+                predict_account_address,
+                self.settings.chain_id,
+                message,
+            )
+        except ImportError as error:
+            raise RuntimeError("生成 Predict Account JWT 需要安装 Predict.fun 官方 SDK。") from error
+        except (TypeError, ValueError) as error:
+            raise RuntimeError("Privy Wallet Private Key 或 Predict Account Address 无效。") from error
+        except Exception as error:  # noqa: BLE001
+            raise RuntimeError(
+                "无法使用该 Privy Wallet Private Key 验证 Predict Account Address。"
+            ) from error
+        response = await self._request(
+            "POST",
+            "/v1/auth",
+            {
+                "signer": predict_account_address,
+                "signature": signature,
+                "message": message,
+            },
+        )
+        token = self._data(response).get("token")
+        if not token:
+            raise RuntimeError("Predict.fun 未返回 JWT Token。")
+        return str(token)
+
     async def get_positions(self) -> dict[str, Decimal]:
         if self.dry_run:
             return {}
@@ -434,6 +473,22 @@ class PredictClient:
         account = Account.from_key(private_key)
         signed_message = account.sign_message(encode_defunct(text=message))
         return account.address, f"0x{signed_message.signature.hex()}"
+
+    @staticmethod
+    def _sign_predict_account_auth_message(
+        private_key: str,
+        predict_account_address: str,
+        chain_id: int,
+        message: str,
+    ) -> str:
+        from predict_sdk import ChainId, OrderBuilder, OrderBuilderOptions  # type: ignore[import-not-found]
+
+        builder = OrderBuilder.make(
+            ChainId(chain_id),
+            private_key,
+            OrderBuilderOptions(predict_account=predict_account_address),
+        )
+        return builder.sign_predict_account_message(message)
 
     def _parse_orderbook(
         self,

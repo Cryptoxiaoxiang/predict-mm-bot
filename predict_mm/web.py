@@ -253,6 +253,7 @@ class DashboardState:
         """Read approval state only; this never signs or submits a transaction."""
         builder, steps = await self._trade_approval_plan()
         checks = await builder.check_approvals_async(steps)
+        native_balance_wei, gas_wallet_address = await self._native_gas_balance(builder)
         rows = [
             {
                 "id": str(check.step.id),
@@ -269,7 +270,20 @@ class DashboardState:
             "required": len(rows),
             "missing": missing,
             "steps": rows,
+            "gas_asset": "BNB",
+            "gas_balance": format(Decimal(native_balance_wei) / Decimal(10**18), "f"),
+            "gas_wallet_address": gas_wallet_address,
         }
+
+    async def _native_gas_balance(self, builder: object) -> tuple[int, str]:
+        """Read the SDK signer's BNB balance without signing or sending a transaction."""
+        web3 = getattr(builder, "_web3", None)
+        signer = getattr(builder, "_signer", None)
+        signer_address = str(getattr(signer, "address", ""))
+        if web3 is None or not signer_address:
+            raise RuntimeError("官方 SDK 未提供签名钱包信息，无法检查授权 Gas 余额。")
+        balance_wei = await asyncio.to_thread(web3.eth.get_balance, signer_address)
+        return int(balance_wei), signer_address
 
     async def set_trade_approvals(self) -> dict[str, object]:
         """Submit only missing approval transactions after the UI confirmation."""
@@ -284,6 +298,15 @@ class DashboardState:
                 "ready": True,
                 "message": "交易授权已经完整，无需重复设置。",
             }
+        native_balance_wei, _ = await self._native_gas_balance(builder)
+        if native_balance_wei <= 0:
+            settings = Settings.from_env()
+            wallet_name = "Privy 签名钱包" if settings.predict_account_address else "EOA 钱包"
+            raise RuntimeError(
+                f"{wallet_name}的 BNB 余额为 0，无法支付 SDK 授权交易的 Gas。"
+                "请向页面显示的“授权 Gas 钱包地址”转入少量 BNB；"
+                "使用 Predict Account 时不要转到 Predict Account Address。"
+            )
         try:
             report = await builder.run_approvals_async(
                 missing_steps,
@@ -295,13 +318,17 @@ class DashboardState:
                 f"官方 SDK 设置交易授权失败：{error}"
             ) from error
         if not report.success:
-            failed = [
-                str(result.step.id)
-                for result in report.steps
-                if str(result.status).lower() == "failed"
-            ]
-            suffix = f"（{', '.join(failed)}）" if failed else ""
-            raise RuntimeError(f"部分交易授权未成功{suffix}，请查看服务器日志中的原始原因。")
+            failed_details: list[str] = []
+            for result in report.steps:
+                if str(result.status).lower() != "failed":
+                    continue
+                transaction = getattr(result, "transaction", None)
+                cause = getattr(transaction, "cause", None)
+                detail = str(cause) if cause else "链上交易未成功"
+                failed_details.append(f"{result.step.id}: {detail}")
+            details = "；".join(failed_details) or "官方 SDK 未返回失败详情"
+            logging.getLogger("predict-mm").error("设置交易授权失败：%s", details)
+            raise RuntimeError(f"设置交易授权失败：{details}")
         return {
             "ok": True,
             "ready": True,

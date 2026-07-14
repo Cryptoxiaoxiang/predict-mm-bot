@@ -1,6 +1,7 @@
 from decimal import Decimal
 import asyncio
 import json
+from unittest.mock import Mock, patch
 
 from predict_mm.client import PredictClient
 from predict_mm.config import Settings
@@ -12,6 +13,60 @@ def test_headers_match_predict_docs() -> None:
 
     assert client._headers()["x-api-key"] == "api-key"
     assert client._headers()["Authorization"] == "Bearer jwt"
+
+
+def test_rest_request_matches_official_requests_usage() -> None:
+    client = PredictClient(Settings(api_key="api-key"), dry_run=False)
+    response = Mock(status_code=200, content=b'{"data":{"message":"hello"}}')
+    response.json.return_value = {"data": {"message": "hello"}}
+
+    with patch("predict_mm.client.requests.request", return_value=response) as request:
+        result = client._request_sync(
+            "GET",
+            "/v1/auth/message",
+            query={"empty": "", "limit": 10},
+        )
+
+    assert result == {"data": {"message": "hello"}}
+    request.assert_called_once_with(
+        "GET",
+        "https://api.predict.fun/v1/auth/message",
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "x-api-key": "api-key",
+        },
+        params={"limit": 10},
+        timeout=10,
+    )
+
+
+def test_rest_request_surfaces_predict_error_message() -> None:
+    client = PredictClient(Settings(api_key="api-key"), dry_run=False)
+    response = Mock(status_code=403, content=b"blocked")
+    response.json.return_value = {
+        "error": "The site owner has blocked access based on your browser's signature."
+    }
+
+    with patch("predict_mm.client.requests.request", return_value=response):
+        try:
+            client._request_sync("GET", "/v1/auth/message")
+        except RuntimeError as error:
+            assert "HTTP 403" in str(error)
+            assert "browser's signature" in str(error)
+        else:
+            raise AssertionError("expected HTTP 403 to be surfaced")
+
+
+def test_balance_requires_saved_private_key() -> None:
+    client = PredictClient(Settings(), dry_run=False)
+
+    try:
+        asyncio.run(client.get_usdt_balance())
+    except RuntimeError as error:
+        assert "Private Key" in str(error)
+    else:
+        raise AssertionError("expected balance lookup without a private key to fail")
 
 
 def test_dry_run_log_describes_passive_yes_sell_as_no_buy(caplog) -> None:

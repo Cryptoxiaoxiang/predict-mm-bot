@@ -1,3 +1,4 @@
+/opt/homebrew/Library/Homebrew/cmd/shellenv.sh: line 9: /bin/ps: Operation not permitted
 from __future__ import annotations
 
 import asyncio
@@ -40,7 +41,7 @@ class PredictClient:
         """Read the configured trading account's on-chain USDT balance.
 
         The official SDK needs the local signer to initialise its BNB-chain contract
-        client. This only performs a contract ``balanceOf`` call: it does not create,
+        client.  This only performs a contract ``balanceOf`` call: it does not create,
         sign, or submit an order or transaction.
         """
         if not self.settings.private_key:
@@ -385,8 +386,34 @@ class PredictClient:
             method=method,
             headers=self._headers(),
         )
-        with urllib.request.urlopen(request, timeout=10) as response:
-            raw = response.read()
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                raw = response.read()
+        except urllib.error.HTTPError as error:
+            # urllib raises before exposing a JSON error response. Preserve the
+            # service's human-readable explanation so the UI can distinguish an
+            # invalid signature/key from a connectivity failure.  Only a short,
+            # whitespace-normalised message is surfaced; request credentials are
+            # never included in the exception text.
+            raw_error = error.read().decode("utf-8", errors="replace")
+            try:
+                parsed_error = json.loads(raw_error)
+            except json.JSONDecodeError:
+                parsed_error = {}
+            error_data = self._data(parsed_error) if isinstance(parsed_error, dict) else {}
+            detail = next(
+                (
+                    str(error_data.get(key)).strip()
+                    for key in ("message", "error", "detail", "code")
+                    if error_data.get(key) not in (None, "")
+                ),
+                "",
+            )
+            detail = re.sub(r"\s+", " ", detail)[:300]
+            suffix = f"：{detail}" if detail else ""
+            raise RuntimeError(
+                f"Predict.fun 拒绝了 {method} {path} 请求（HTTP {error.code}）{suffix}"
+            ) from error
         return json.loads(raw.decode("utf-8")) if raw else {}
 
     def _markets_from_public_page_sync(self, market_url: str, slug: str) -> list[dict]:
@@ -714,10 +741,10 @@ class PredictClient:
     def _display_order_intent(quote: Quote, *, post_only: bool) -> tuple[Side, str]:
         """Express passive binary asks as bids on the complementary outcome in logs.
 
-        Predict's API submits a sell order for the selected token. For the normal
+        Predict's API submits a sell order for the selected token.  For the normal
         two-sided maker quote, users more naturally read that as buying the other
-        choice. This is a display-only conversion; it never changes the submitted
-        order or its price. Emergency exits remain explicit sell orders.
+        choice.  This is a display-only conversion; it never changes the submitted
+        order or its price.  Emergency exits remain explicit sell orders.
         """
         complementary_outcomes = {"YES": "NO", "NO": "YES"}
         outcome = quote.outcome.strip().upper()

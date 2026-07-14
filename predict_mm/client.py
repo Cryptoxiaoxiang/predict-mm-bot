@@ -662,14 +662,18 @@ class PredictClient:
             "maker": raw["maker"],
             "signer": raw["signer"],
             "taker": raw["taker"],
-            "tokenId": raw.get("token_id") or raw.get("tokenId"),
-            "makerAmount": raw.get("maker_amount") or raw.get("makerAmount"),
-            "takerAmount": raw.get("taker_amount") or raw.get("takerAmount"),
+            "tokenId": self._first_present(raw, "token_id", "tokenId"),
+            "makerAmount": self._first_present(raw, "maker_amount", "makerAmount"),
+            "takerAmount": self._first_present(raw, "taker_amount", "takerAmount"),
             "expiration": raw["expiration"],
             "nonce": raw["nonce"],
-            "feeRateBps": raw.get("fee_rate_bps") or raw.get("feeRateBps"),
+            "feeRateBps": self._first_present(raw, "fee_rate_bps", "feeRateBps"),
             "side": self._api_value(raw["side"]),
-            "signatureType": self._api_value(raw.get("signature_type") or raw.get("signatureType")),
+            # SignatureType.EOA is IntEnum(0). Using ``a or b`` here turns that
+            # valid zero into None, which Predict's integer_int32 parser rejects.
+            "signatureType": self._api_value(
+                self._first_present(raw, "signature_type", "signatureType")
+            ),
             "signature": raw["signature"],
         }
 

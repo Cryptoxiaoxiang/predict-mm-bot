@@ -30,6 +30,12 @@ class EmergencyClient:
         return ManagedOrder(order_id="emergency-exit", quote=quote, created_at=0)
 
 
+async def handle_fill_and_wait(engine: MarketMakerEngine, event: WalletFillEvent) -> None:
+    await engine._handle_wallet_fill(event)
+    if engine._emergency_tasks:
+        await asyncio.gather(*engine._emergency_tasks)
+
+
 def test_buy_fill_cancels_market_and_creates_emergency_sell() -> None:
     client = EmergencyClient()
     engine = MarketMakerEngine(
@@ -51,7 +57,10 @@ def test_buy_fill_cancels_market_and_creates_emergency_sell() -> None:
     engine.open_orders[maker_order.order_id] = maker_order
 
     asyncio.run(
-        engine._handle_wallet_fill(WalletFillEvent(order_id="maker-order", filled_size=Decimal("2")))
+        handle_fill_and_wait(
+            engine,
+            WalletFillEvent(order_id="maker-order", filled_size=Decimal("2")),
+        )
     )
 
     assert client.cancelled_markets == ["market-1"]
@@ -91,8 +100,12 @@ def test_cancelled_buy_fill_still_exits_once_per_settlement() -> None:
         settlement_id="settlement-1",
     )
 
-    asyncio.run(engine._handle_wallet_fill(submitted))
-    asyncio.run(engine._handle_wallet_fill(success))
+    async def exercise() -> None:
+        await engine._handle_wallet_fill(submitted)
+        assert client.created == []
+        await handle_fill_and_wait(engine, success)
+
+    asyncio.run(exercise())
 
     assert len(client.created) == 1
     assert client.created[0][0].price == Decimal("0.01")
@@ -277,9 +290,57 @@ def test_rest_reconciliation_recovers_missed_buy_fill() -> None:
     )
     engine.open_orders[maker_order.order_id] = maker_order
 
-    asyncio.run(engine._reconcile_buy_fills())
+    async def reconcile_and_wait() -> None:
+        await engine._reconcile_buy_fills()
+        if engine._emergency_tasks:
+            await asyncio.gather(*engine._emergency_tasks)
+
+    asyncio.run(reconcile_and_wait())
 
     assert maker_order.filled_size == Decimal("2")
     assert client.created[0][0].side == Side.SELL
     assert client.created[0][0].price == Decimal("0.01")
     assert client.created[0][1] is False
+
+
+def test_emergency_sell_retries_when_settled_shares_are_not_yet_available(caplog) -> None:
+    class DelayedSharesClient(EmergencyClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts = 0
+
+        async def create_order(self, quote: Quote, *, post_only: bool = True) -> ManagedOrder:
+            self.attempts += 1
+            if self.attempts == 1:
+                raise RuntimeError(
+                    "HTTP 400: Insufficient shares: token balance is less than the total ask amount."
+                )
+            return await super().create_order(quote, post_only=post_only)
+
+    client = DelayedSharesClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+    engine._emergency_retry_base_seconds = 0
+    maker_order = ManagedOrder(
+        order_id="maker-order",
+        quote=Quote("market-1", Side.BUY, Decimal("0.50"), Decimal("100")),
+        created_at=0,
+    )
+    engine.open_orders[maker_order.order_id] = maker_order
+
+    with caplog.at_level("CRITICAL", logger="predict-mm"):
+        asyncio.run(
+            handle_fill_and_wait(
+                engine,
+                WalletFillEvent(order_id="maker-order", filled_size=Decimal("100")),
+            )
+        )
+
+    assert client.attempts == 2
+    assert len(client.created) == 1
+    assert client.created[0][0].price == Decimal("0.01")
+    assert "waiting for 100 shares" in caplog.text

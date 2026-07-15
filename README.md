@@ -14,94 +14,55 @@
 
 模拟运行不需要填写钱包私钥，也不会发送真实订单。
 
-## 服务器准备（首次）
+## 一条命令安装到服务器（推荐）
 
-建议租一台云主机，腾讯云最便宜的一个月也就30人民币。 也可以本地电脑安装，但是云主机可以24小时运行。 选择 Ubuntu 24.04 服务器。
-登录服务器后，先检查 Python 是否已经安装：
-
-```bash
-python3 --version
-```
-
-显示 `Python 3.11` 或更高版本即可继续下一步。如果提示找不到命令，请安装 Python、虚拟环境工具和 Git：
+建议使用 Ubuntu 24.04 云服务器。通过 SSH 登录服务器后，复制并执行下面这一条命令：
 
 ```bash
-sudo apt update
-sudo apt install -y python3 python3-venv python3-pip git
-python3 --version
+curl -fsSL https://raw.githubusercontent.com/Cryptoxiaoxiang/predict-mm-bot/main/install.sh -o /tmp/predict-mm-install.sh && sudo bash /tmp/predict-mm-install.sh
 ```
 
-如果最后显示的版本低于 3.11，请改用 Ubuntu 24.04 服务器，或先将服务器的 Python 升级到 3.11 以上再继续。
+如果当前登录的就是 `root` 用户，也可以去掉命令中的 `sudo`。脚本会自动完成：
 
-如果执行 `python3 -m venv .venv` 时提示缺少 `ensurepip` 或虚拟环境组件，请安装与当前 Python **相同版本**的 venv 包后重试。例如服务器显示的是 Python 3.12：
+- 安装 Python、虚拟环境和下载工具；
+- 下载或更新机器人；
+- 安装网页运行依赖；
+- 创建受系统管理的后台服务；
+- 启动网页控制台，并设置服务器重启后自动恢复；
+- 更新时保留已有的 `.env`、`config.toml` 和日志；
+- 首次改用一键安装时，自动迁移 `/root/predict-mm-bot` 中已有的账户和市场设置。
 
-```bash
-sudo apt update
-sudo apt install -y python3.12-venv
-```
+脚本只支持 Ubuntu/Debian，推荐 Ubuntu 24.04。如果检测到 Python 低于 3.11、端口被其他程序占用，或机器人仍在运行，脚本会停止并显示原因，不会强行覆盖或中断实盘机器人。
 
-Python 3.11 则对应使用 `python3.11-venv`。不要在没有确认 Python 版本的情况下盲目复制版本号。
+以后需要更新到 GitHub 最新版时，先在网页点击“停止并撤单”，然后再次执行同一条安装命令即可。
 
-## 在服务器上部署网页控制台（推荐）
+## 打开网页控制台
 
-登录服务器后，先下载项目并进入目录：
-
-```bash
-git clone https://github.com/Cryptoxiaoxiang/predict-mm-bot.git
-cd predict-mm-bot
-```
-
-### 如果 `git clone` 失败
-
-部分 VPS 网络会把公开仓库的克隆错误地显示为“仓库不存在”或出现 HTTPS 连接问题。这不一定是仓库私有、账号或 Token 的问题。可以改用 GitHub 的官方源码下载地址：
-
-```bash
-cd /root
-curl -L https://codeload.github.com/Cryptoxiaoxiang/predict-mm-bot/tar.gz/refs/heads/main -o predict-mm-bot.tar.gz
-tar -xzf predict-mm-bot.tar.gz
-mv predict-mm-bot-main predict-mm-bot
-cd predict-mm-bot
-```
-
-仓库是公开的，以上方式不需要输入 GitHub 密码或 Token。以后更新代码时，重复下载并解压到一个临时目录，再只覆盖程序文件；不要覆盖 `.env` 和 `config.toml`。
-
-安装依赖并启动网页控制台：
-
-```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -e .
-.venv/bin/python -m predict_mm.web
-```
-
-如果网页运行在远程服务器上，网页不会直接暴露到公网，保证安全。请在自己的电脑打开终端建立 SSH 隧道：
-在终端里输入:
+网页只监听服务器本机，不会直接暴露到公网，保证安全。安装完成后，在**自己的本地电脑**打开一个新的终端窗口并输入：
 
 ```bash
 ssh -L 8080:127.0.0.1:8080 用户名@服务器IP
 ```
 
-然后将终端保持在打开状态,在自己电脑浏览器打开 `http://127.0.0.1:8080`。
+`用户名` 可以是 `root`，很多云主机服务商默认是ubuntu,自己确认，然后保持这个 SSH 窗口打开，在自己电脑的浏览器访问 `http://127.0.0.1:8080`。
 
-确认网页能启动后，按 `Ctrl+C` 停止前台服务。若希望退出 SSH 后网页仍持续运行：
+关闭这个 SSH 窗口只会断开网页访问通道，VPS 上的网页服务和已经启动的机器人仍会继续运行。如果电脑重启或者休眠，要重新输入一遍上面命令打开ssh通道才能访问网页
 
-```bash
-mkdir -p logs
-nohup .venv/bin/python -m predict_mm.web > logs/web-console.log 2>&1 &
-```
+## 服务管理与排错
 
-执行后可以关闭本地终端和 SSH 连接，网页控制台与已启动的机器人仍会在 VPS 上继续运行。查看后台日志：
+查看实时日志：
 
 ```bash
-tail -f logs/web-console.log
+sudo journalctl -u predict-mm-bot -f
 ```
 
-确认服务是否真的启动成功：
+重新启动网页服务：
 
 ```bash
-curl --max-time 5 -o /dev/null -s -w '%{http_code}\n' http://127.0.0.1:8080
+sudo systemctl restart predict-mm-bot
 ```
 
-返回 `200` 代表网页控制台可用；如果返回 `000`，请查看上一条日志命令的错误信息。
+重启或更新前，应先在网页点击“停止并撤单”。系统服务重启后只会恢复网页控制台，机器人不会自动开始实盘挂单。
 
 第一次打开网页时，先在“账户设置”填写 API Key 等账户信息并点“保存账户设置”；再填写第一个市场的 Market ID、交易方向和风险限制，需要更多市场时点“添加市场”，最后点“保存配置”。机器人会生成两个只保存在服务器上的配置文件：
 
@@ -161,29 +122,9 @@ python -m predict_mm.main --config config.toml
 3. 保持很小的单次挂单数量和仓位上限；
 4. 启动后先到 Predict.fun 页面确认订单和撤单行为是否符合预期。
 
-不需要填写 API Secret；Predict.fun 当前不要求该字段。
-
-初次实盘时，如果程序提示缺少市场信息，请按提示补充市场的 `token_id` 等信息；通常机器人会自动尝试获取这些数据。
-
-## 常用调整
-
-在 `config.toml` 中：
-
-- 每个 `[[markets]]` 中的 `quote_size`：该市场每次挂单的数量；
-- `cancel_after_seconds`：订单保留多少秒后撤销；
-- 当盘口价格逼近某笔挂单至只剩 1 个 tick 时，机器人会在下一次轮询（默认最多 2 秒）撤单，并按距离最新盘口 2 个 tick 的规则重新报价；
-- 每个市场的价格 tick 会由 API 返回的 `decimalPrecision` 自动识别；例如精度为 `2` 时，机器人按 `0.01` 价格档位报价；
-- `max_position_per_market`：单个市场允许的最大仓位；
-- `max_total_position`：所有市场合计允许的最大仓位；
-- `dry_run`：是否处于模拟运行。
-- `emergency_exit_on_buy_fill`：买单被吃单后是否以 `0.01` 紧急卖出；默认 `true`。
-
-配置修改后，停止机器人再重新启动即可生效。
 
 ## 账户安全
 
 - `.env` 和 `config.toml` 不会被提交到 GitHub；不要把它们发送给任何人。
 - 不要在聊天、截图或公开仓库中暴露 API Key、JWT Token 或私钥。
 - 程序启动和停止时会尝试撤销它管理的开放订单；即使如此，也应在每次实盘后到 Predict.fun 页面核对开放订单。
-
-Predict.fun 的快速撤单仅将订单从订单簿移除，不等同于链上取消；如需彻底取消，请使用 Predict.fun 官方工具完成链上取消。

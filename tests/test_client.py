@@ -353,6 +353,35 @@ def test_quote_metadata_can_be_completed_from_market_response() -> None:
     assert completed.is_yield_bearing is True
 
 
+def test_positions_convert_wei_to_share_quantities() -> None:
+    class StubClient(PredictClient):
+        async def _request(self, method, path, payload=None, query=None):  # type: ignore[no-untyped-def]
+            assert (method, path) == ("GET", "/v1/positions")
+            return {
+                "data": {
+                    "positions": [
+                        {
+                            "amount": "100000000000000000000",
+                            "market": {"id": "market-yes"},
+                            "outcome": {"name": "YES"},
+                        },
+                        {
+                            "amount": "25000000000000000000",
+                            "market": {"id": "market-no"},
+                            "outcome": {"name": "NO"},
+                        },
+                    ]
+                }
+            }
+
+    client = StubClient(Settings(api_key="api-key", jwt_token="jwt"), dry_run=False)
+
+    assert asyncio.run(client.get_positions()) == {
+        "market-yes": Decimal("100"),
+        "market-no": Decimal("-25"),
+    }
+
+
 def test_wallet_fill_event_uses_confirmed_fill_size() -> None:
     client = PredictClient(Settings(), dry_run=True)
 
@@ -361,6 +390,7 @@ def test_wallet_fill_event_uses_confirmed_fill_size() -> None:
             "type": "orderTransactionSuccess",
             "orderId": "order-1",
             "orderHash": "hash-1",
+            "settlementId": "settlement-1",
             "fill": {"executedSizeWei": "2500000000000000000"},
         }
     )
@@ -369,3 +399,20 @@ def test_wallet_fill_event_uses_confirmed_fill_size() -> None:
     assert event.order_id == "order-1"
     assert event.order_hash == "hash-1"
     assert event.filled_size == Decimal("2.5")
+    assert event.settlement_id == "settlement-1"
+
+
+def test_wallet_fill_event_accepts_match_submission() -> None:
+    client = PredictClient(Settings(), dry_run=True)
+
+    event = client._wallet_fill_event(
+        {
+            "type": "orderTransactionSubmitted",
+            "orderId": "order-1",
+            "settlementId": "settlement-1",
+            "fill": {"executedSizeWei": "1000000000000000000"},
+        }
+    )
+
+    assert event is not None
+    assert event.event_type == "orderTransactionSubmitted"

@@ -56,6 +56,40 @@ def test_buy_fill_cancels_market_and_creates_emergency_sell() -> None:
     assert post_only is False
 
 
+def test_cancelled_buy_fill_still_exits_once_per_settlement() -> None:
+    client = EmergencyClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+    maker_order = ManagedOrder(
+        order_id="maker-order",
+        quote=Quote("market-1", Side.BUY, Decimal("0.50"), Decimal("3")),
+        created_at=0,
+        status=OrderStatus.CANCELED,
+    )
+    engine.open_orders[maker_order.order_id] = maker_order
+    submitted = WalletFillEvent(
+        order_id="maker-order",
+        filled_size=Decimal("2"),
+        settlement_id="settlement-1",
+        event_type="orderTransactionSubmitted",
+    )
+    success = WalletFillEvent(
+        order_id="maker-order",
+        filled_size=Decimal("2"),
+        settlement_id="settlement-1",
+    )
+
+    asyncio.run(engine._handle_wallet_fill(submitted))
+    asyncio.run(engine._handle_wallet_fill(success))
+
+    assert len(client.created) == 1
+    assert client.created[0][0].price == Decimal("0.01")
+
+
 def test_active_orders_exposes_each_open_order() -> None:
     engine = MarketMakerEngine(
         config=BotConfig(markets=[MarketConfig(id="market-1")]),

@@ -33,6 +33,7 @@ class MarketMakerEngine:
         self._fill_events: asyncio.Queue[WalletFillEvent] = asyncio.Queue()
         self._wallet_task: asyncio.Task[None] | None = None
         self._halted_markets: set[str] = set()
+        self._handled_fill_settlements: set[str] = set()
 
     def request_stop(self) -> None:
         self._stop.set()
@@ -194,18 +195,30 @@ class MarketMakerEngine:
                 (candidate for candidate in self.open_orders.values() if candidate.order_hash == event.order_hash),
                 None,
             )
-        if (
-            order is None
-            or order.status != OrderStatus.OPEN
-            or order.is_emergency_exit
-            or order.quote.side != Side.BUY
-        ):
+        if order is None or order.is_emergency_exit or order.quote.side != Side.BUY:
             return
 
         fill_size = event.filled_size
         if fill_size <= Decimal("0"):
             return
+
+        # Predict sends a submitted event followed by a success event for the
+        # same settlement. It is also possible for a fill to win the race with a
+        # cancellation request, so an order marked locally as cancelled must not
+        # make us discard a confirmed fill.
+        settlement_key = event.settlement_id or (
+            f"{event.order_id}:{event.order_hash or ''}:{fill_size}"
+        )
+        if settlement_key in self._handled_fill_settlements:
+            return
+        self._handled_fill_settlements.add(settlement_key)
+
         order.filled_size += fill_size
+        logger.critical(
+            "Detected %s for buy order %s; starting emergency exit",
+            event.event_type,
+            order.order_id,
+        )
         await self._emergency_exit(order, fill_size)
 
     async def _emergency_exit(self, filled_order: ManagedOrder, fill_size: Decimal) -> None:

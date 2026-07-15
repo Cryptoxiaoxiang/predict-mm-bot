@@ -79,6 +79,8 @@ class WalletFillEvent:
     order_id: str
     filled_size: Decimal
     order_hash: str | None = None
+    settlement_id: str | None = None
+    event_type: str = "orderTransactionSuccess"
 
 
 def quantize_price(price: Decimal, tick_size: Decimal, side: Side) -> Decimal:

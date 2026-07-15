@@ -204,7 +204,13 @@ class PredictClient:
             )
             if not market_id:
                 continue
-            amount = Decimal(str(row.get("amount") or row.get("size") or row.get("quantity") or "0"))
+            # The positions endpoint returns share quantities in 18-decimal wei.
+            # Convert before applying risk limits; otherwise 100 shares is treated
+            # as 100000000000000000000 shares.
+            amount_wei = Decimal(
+                str(row.get("amount") or row.get("size") or row.get("quantity") or "0")
+            )
+            amount = amount_wei / Decimal(10**18)
             outcome = self._outcome_name(row.get("outcome"))
             signed_amount = -amount if outcome.upper() == "NO" else amount
             positions[market_id] = positions.get(market_id, Decimal("0")) + signed_amount
@@ -632,7 +638,11 @@ class PredictClient:
         return {"data": data}
 
     def _wallet_fill_event(self, message: dict) -> WalletFillEvent | None:
-        if message.get("type") != "orderTransactionSuccess":
+        event_type = str(message.get("type") or "")
+        # A submitted transaction means the limit order has matched. Handling it
+        # here gets the emergency exit onto the book before chain settlement
+        # completes; the later success event is deduplicated by settlement ID.
+        if event_type not in {"orderTransactionSubmitted", "orderTransactionSuccess"}:
             return None
         fill = message.get("fill") or (message.get("details") or {}).get("fill") or {}
         size_wei = fill.get("executedSizeWei")
@@ -643,6 +653,8 @@ class PredictClient:
             order_id=str(order_id),
             order_hash=str(message.get("orderHash") or "") or None,
             filled_size=Decimal(str(size_wei)) / Decimal(10**18),
+            settlement_id=str(message.get("settlementId") or "") or None,
+            event_type=event_type,
         )
 
     def _signed_order_to_api_dict(

@@ -8,16 +8,16 @@
 
 你需要：
 
-- Predictfun 注册链接，可以获得10%手续费折扣: https://predict.fun?ref=5BA3F
+- Predictfun 注册链接，可以获得10%手续费折扣: https://predict.fun?ref=5BA3F ，为了安全最好使用一个新钱包注册使用。
 - 一台已安装 Python 3.11 或更高版本的电脑；
-- 想要运行的 Predict.fun 市场网址或 `Market ID`；
 - 只有准备真实交易时，才需要 Predict.fun API Key 和钱包私钥；网页会自动生成 JWT Token。
 
 模拟运行不需要填写钱包私钥，也不会发送真实订单。
 
 ## 服务器准备（首次）
 
-建议选择 Ubuntu 24.04 服务器。登录服务器后，先检查 Python 是否已经安装：
+建议租一台云主机，腾讯云最便宜的一个月也就30人民币。 也可以本地电脑安装，但是云主机可以24小时运行。 选择 Ubuntu 24.04 服务器。
+登录服务器后，先检查 Python 是否已经安装：
 
 ```bash
 python3 --version
@@ -73,7 +73,7 @@ python3 -m venv .venv
 .venv/bin/python -m predict_mm.web
 ```
 
-如果网页运行在远程服务器上，网页不会直接暴露到公网。请在自己的电脑终端建立 SSH 隧道：
+如果网页运行在远程服务器上，网页不会直接暴露到公网，保证安全。请在自己的电脑打开终端建立 SSH 隧道：
 在终端里输入:
 
 ```bash

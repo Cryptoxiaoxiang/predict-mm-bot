@@ -760,9 +760,9 @@ class PredictClient:
 
     def _wallet_fill_event(self, message: dict) -> WalletFillEvent | None:
         event_type = str(message.get("type") or "")
-        # A submitted transaction means the limit order has matched. Handling it
-        # here gets the emergency exit onto the book before chain settlement
-        # completes; the later success event is deduplicated by settlement ID.
+        # Submitted lets the engine halt and cancel quotes immediately. It must
+        # not sell until Success because the bought shares are only available
+        # after the on-chain settlement has succeeded.
         if event_type not in {"orderTransactionSubmitted", "orderTransactionSuccess"}:
             return None
         fill = message.get("fill") or (message.get("details") or {}).get("fill") or {}

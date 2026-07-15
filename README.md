@@ -19,7 +19,7 @@
 建议使用 Ubuntu 24.04 云服务器。通过 SSH 登录服务器后，复制并执行下面这一条命令：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Cryptoxiaoxiang/predict-mm-bot/main/install.sh -o /tmp/predict-mm-install.sh && sudo bash /tmp/predict-mm-install.sh
+curl -fsSL https://codeload.github.com/Cryptoxiaoxiang/predict-mm-bot/tar.gz/refs/heads/main | tar -xzO predict-mm-bot-main/install.sh > /tmp/predict-mm-install.sh && sudo bash /tmp/predict-mm-install.sh
 ```
 
 如果当前登录的就是 `root` 用户，也可以去掉命令中的 `sudo`。脚本会自动完成：

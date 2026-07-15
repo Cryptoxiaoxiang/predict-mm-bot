@@ -115,6 +115,7 @@ class MarketMakerEngine:
             await self._handle_wallet_fill(event)
 
     async def _tick(self) -> None:
+        await self._reconcile_buy_fills()
         await self._cancel_stale_orders()
         positions = await self.client.get_positions()
 
@@ -176,8 +177,7 @@ class MarketMakerEngine:
                 market_id,
                 best_price.price,
             )
-            await self.client.cancel_order(order.order_id)
-            order.status = OrderStatus.CANCELED
+            await self._cancel_order_safely(order)
 
     async def _cancel_stale_orders(self) -> None:
         for order in list(self.open_orders.values()):
@@ -185,8 +185,59 @@ class MarketMakerEngine:
                 continue
             if order.age_seconds < self.config.cancel_after_seconds:
                 continue
+            await self._cancel_order_safely(order)
+
+    async def _cancel_order_safely(self, order: ManagedOrder) -> bool:
+        """Keep a temporary cancel API failure from stopping the entire engine."""
+        try:
             await self.client.cancel_order(order.order_id)
-            order.status = OrderStatus.CANCELED
+        except Exception as error:  # noqa: BLE001
+            logger.warning(
+                "Cancel failed for order %s; keeping it active and retrying next cycle: %s",
+                order.order_id,
+                error,
+            )
+            return False
+        order.status = OrderStatus.CANCELED
+        return True
+
+    async def _reconcile_buy_fills(self) -> None:
+        """Recover fills missed while the no-snapshot wallet stream was disconnected."""
+        if self.config.dry_run or not self.config.emergency_exit_on_buy_fill:
+            return
+        candidates = [
+            order
+            for order in self.open_orders.values()
+            if not order.is_emergency_exit
+            and order.quote.side == Side.BUY
+            and order.filled_size < order.quote.size
+        ]
+        if not candidates:
+            return
+        try:
+            filled_amounts = await self.client.get_order_filled_amounts()
+        except Exception as error:  # noqa: BLE001
+            logger.warning("Unable to reconcile order fills from REST: %s", error)
+            return
+
+        for order in candidates:
+            cumulative = max(
+                filled_amounts.get(order.order_id, Decimal("0")),
+                filled_amounts.get(order.order_hash or "", Decimal("0")),
+            )
+            cumulative = min(cumulative, order.quote.size)
+            delta = cumulative - order.filled_size
+            if delta <= Decimal("0"):
+                continue
+            await self._handle_wallet_fill(
+                WalletFillEvent(
+                    order_id=order.order_id,
+                    order_hash=order.order_hash,
+                    filled_size=delta,
+                    settlement_id=f"rest:{order.order_id}:{cumulative}",
+                    event_type="REST order reconciliation",
+                )
+            )
 
     async def _handle_wallet_fill(self, event: WalletFillEvent) -> None:
         order = self.open_orders.get(event.order_id)
@@ -229,10 +280,23 @@ class MarketMakerEngine:
             market_id,
             fill_size,
         )
-        await self.client.cancel_all_orders(market_id)
-        for order in self.open_orders.values():
-            if order.quote.market_id == market_id and order.status == OrderStatus.OPEN:
-                order.status = OrderStatus.CANCELED
+        cancel_succeeded = False
+        try:
+            await self.client.cancel_all_orders(market_id)
+            cancel_succeeded = True
+        except Exception as error:  # noqa: BLE001
+            # Exiting the filled position is more important than waiting for a
+            # temporarily failing fast-cancel endpoint. The emergency order uses
+            # CANCEL_MAKER self-trade prevention as an additional safeguard.
+            logger.critical(
+                "Could not cancel all market quotes before emergency exit; "
+                "continuing with the 0.01 sell: %s",
+                error,
+            )
+        if cancel_succeeded:
+            for order in self.open_orders.values():
+                if order.quote.market_id == market_id and order.status == OrderStatus.OPEN:
+                    order.status = OrderStatus.CANCELED
 
         exit_order = await self.client.create_order(
             replace(

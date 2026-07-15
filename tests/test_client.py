@@ -489,3 +489,114 @@ def test_wallet_fill_event_accepts_match_submission() -> None:
 
     assert event is not None
     assert event.event_type == "orderTransactionSubmitted"
+
+
+def test_wallet_fill_event_unwraps_official_websocket_message_envelope() -> None:
+    client = PredictClient(Settings(), dry_run=True)
+    message = {
+        "type": "M",
+        "topic": "predictWalletEvents/jwt-token",
+        "data": {
+            "type": "orderTransactionSuccess",
+            "orderId": "order-1",
+            "settlementId": "settlement-1",
+            "fill": {"executedSizeWei": "3000000000000000000"},
+        },
+    }
+
+    payload = client._wallet_event_payload(message)
+    assert payload is not None
+    event = client._wallet_fill_event(payload)
+
+    assert event is not None
+    assert event.order_id == "order-1"
+    assert event.filled_size == Decimal("3")
+
+
+def test_wallet_stream_answers_official_heartbeat_and_yields_enveloped_fill() -> None:
+    class FakeWebSocket:
+        def __init__(self) -> None:
+            self.sent: list[dict] = []
+            self.messages = iter(
+                [
+                    {"type": "R", "requestId": 1, "success": True},
+                    {"type": "M", "topic": "heartbeat", "data": 1736696400000},
+                    {
+                        "type": "M",
+                        "topic": "predictWalletEvents/jwt",
+                        "data": {
+                            "type": "orderTransactionSubmitted",
+                            "orderId": "order-1",
+                            "settlementId": "settlement-1",
+                            "fill": {"executedSizeWei": "1000000000000000000"},
+                        },
+                    },
+                ]
+            )
+
+        async def send(self, raw_message: str) -> None:
+            self.sent.append(json.loads(raw_message))
+
+        def __aiter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        async def __anext__(self):  # type: ignore[no-untyped-def]
+            try:
+                return json.dumps(next(self.messages))
+            except StopIteration as error:
+                raise StopAsyncIteration from error
+
+    class FakeConnection:
+        def __init__(self, websocket: FakeWebSocket) -> None:
+            self.websocket = websocket
+
+        async def __aenter__(self) -> FakeWebSocket:
+            return self.websocket
+
+        async def __aexit__(self, *_args) -> None:  # type: ignore[no-untyped-def]
+            return None
+
+    async def collect_events(client: PredictClient) -> list:  # type: ignore[type-arg]
+        return [event async for event in client.stream_wallet_fill_events()]
+
+    websocket = FakeWebSocket()
+    client = PredictClient(Settings(api_key="api-key", jwt_token="jwt"), dry_run=False)
+    with patch(
+        "websockets.asyncio.client.connect",
+        return_value=FakeConnection(websocket),
+    ):
+        events = asyncio.run(collect_events(client))
+
+    assert websocket.sent == [
+        {
+            "method": "subscribe",
+            "requestId": 1,
+            "params": ["predictWalletEvents/jwt"],
+        },
+        {"method": "heartbeat", "data": 1736696400000},
+    ]
+    assert len(events) == 1
+    assert events[0].order_id == "order-1"
+    assert events[0].filled_size == Decimal("1")
+
+
+def test_get_order_filled_amounts_maps_id_and_hash() -> None:
+    class StubClient(PredictClient):
+        async def _request(self, method, path, payload=None, query=None):  # type: ignore[no-untyped-def]
+            assert (method, path, query) == ("GET", "/v1/orders", {"first": 100})
+            return {
+                "data": [
+                    {
+                        "id": "order-1",
+                        "amountFilled": "2500000000000000000",
+                        "order": {"hash": "hash-1"},
+                    }
+                ]
+            }
+
+    client = StubClient(Settings(api_key="api-key", jwt_token="jwt"), dry_run=False)
+
+    assert asyncio.run(client.get_order_filled_amounts()) == {
+        "order-1": Decimal("2.5"),
+        "hash-1": Decimal("2.5"),
+    }

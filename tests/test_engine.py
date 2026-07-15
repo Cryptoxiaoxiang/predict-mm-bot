@@ -146,6 +146,9 @@ class RepriceClient:
     async def get_positions(self) -> dict[str, Decimal]:
         return {}
 
+    async def get_order_filled_amounts(self) -> dict[str, Decimal]:
+        return {}
+
     async def get_orderbook(self, market_id: str) -> OrderBook:
         return OrderBook(
             market_id=market_id,
@@ -227,3 +230,56 @@ def test_approached_sell_quote_is_canceled() -> None:
     asyncio.run(engine._cancel_orders_approached_by_market("market-1", book))
 
     assert client.cancelled == ["old-sell"]
+
+
+def test_temporary_cancel_failure_keeps_engine_running_and_order_open(caplog) -> None:
+    class FailingCancelClient(RepriceClient):
+        async def cancel_order(self, order_id: str) -> None:
+            raise RuntimeError("HTTP 500: verify and cancel orders by id")
+
+    client = FailingCancelClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[MarketConfig(id="market-1")], cancel_after_seconds=0),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+    order = ManagedOrder(
+        order_id="old-buy",
+        quote=Quote("market-1", Side.BUY, Decimal("0.48"), Decimal("1")),
+        created_at=0,
+    )
+    engine.open_orders[order.order_id] = order
+
+    with caplog.at_level("WARNING", logger="predict-mm"):
+        asyncio.run(engine._cancel_stale_orders())
+
+    assert order.status == OrderStatus.OPEN
+    assert "retrying next cycle" in caplog.text
+
+
+def test_rest_reconciliation_recovers_missed_buy_fill() -> None:
+    class ReconciliationClient(EmergencyClient):
+        async def get_order_filled_amounts(self) -> dict[str, Decimal]:
+            return {"maker-order": Decimal("2")}
+
+    client = ReconciliationClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+    maker_order = ManagedOrder(
+        order_id="maker-order",
+        quote=Quote("market-1", Side.BUY, Decimal("0.50"), Decimal("3")),
+        created_at=0,
+    )
+    engine.open_orders[maker_order.order_id] = maker_order
+
+    asyncio.run(engine._reconcile_buy_fills())
+
+    assert maker_order.filled_size == Decimal("2")
+    assert client.created[0][0].side == Side.SELL
+    assert client.created[0][0].price == Decimal("0.01")
+    assert client.created[0][1] is False

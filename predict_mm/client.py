@@ -229,6 +229,37 @@ class PredictClient:
             positions[market_id] = positions.get(market_id, Decimal("0")) + signed_amount
         return positions
 
+    async def get_order_filled_amounts(self) -> dict[str, Decimal]:
+        """Return cumulative filled share amounts keyed by both order ID and hash.
+
+        Wallet WebSocket topics intentionally have no snapshot. Polling the authenticated
+        orders endpoint gives the engine a recovery path if a fill happens while that stream
+        is reconnecting.
+        """
+        if self.dry_run:
+            return {}
+
+        self._require_api_key()
+        self._require_jwt()
+        response = await self._request("GET", "/v1/orders", query={"first": 100})
+        filled_amounts: dict[str, Decimal] = {}
+        for row in self._rows(response):
+            raw_amount = row.get("amountFilled") or row.get("amount_filled") or "0"
+            amount = Decimal(str(raw_amount)) / Decimal(10**18)
+            order = row.get("order") if isinstance(row.get("order"), dict) else {}
+            keys = {
+                str(row.get("id") or row.get("orderId") or row.get("order_id") or ""),
+                str(
+                    row.get("orderHash")
+                    or row.get("order_hash")
+                    or order.get("hash")
+                    or ""
+                ),
+            }
+            for key in keys - {""}:
+                filled_amounts[key] = amount
+        return filled_amounts
+
     async def create_order(self, quote: Quote, *, post_only: bool = True) -> ManagedOrder:
         if self.dry_run:
             order = ManagedOrder(order_id=f"dry-{uuid4().hex[:12]}", quote=quote, created_at=monotonic())
@@ -306,10 +337,26 @@ class PredictClient:
                     logger.warning("钱包事件流拒绝了旧 JWT，正在自动重新生成。")
                     await self._refresh_jwt(subscribed_jwt)
                     return
-                if message.get("method") == "heartbeat":
-                    await websocket.send(json.dumps({"method": "heartbeat", "data": message.get("data")}))
+                if isinstance(error, dict):
+                    raise RuntimeError(
+                        "Predict.fun 钱包事件订阅失败："
+                        + str(error.get("message") or error.get("code") or "unknown error")
+                    )
+
+                # Official WebSocket pushes use an envelope:
+                # {"type":"M", "topic":"heartbeat|predictWalletEvents/...", "data": ...}
+                if message.get("type") == "R":
+                    if message.get("requestId") == 1 and message.get("success") is True:
+                        logger.info("Predict.fun 钱包成交监听已连接。")
                     continue
-                event = self._wallet_fill_event(message)
+                if message.get("type") == "M" and message.get("topic") == "heartbeat":
+                    await websocket.send(
+                        json.dumps({"method": "heartbeat", "data": message.get("data")})
+                    )
+                    continue
+
+                payload = self._wallet_event_payload(message)
+                event = self._wallet_fill_event(payload) if payload is not None else None
                 if event is not None:
                     yield event
 
@@ -730,6 +777,19 @@ class PredictClient:
             settlement_id=str(message.get("settlementId") or "") or None,
             event_type=event_type,
         )
+
+    @staticmethod
+    def _wallet_event_payload(message: dict) -> dict | None:
+        """Unwrap an official wallet-topic message while accepting legacy direct payloads."""
+        if message.get("type") == "M":
+            topic = str(message.get("topic") or "")
+            data = message.get("data")
+            if topic.startswith("predictWalletEvents/") and isinstance(data, dict):
+                return data
+            return None
+        if str(message.get("type") or "").startswith("order"):
+            return message
+        return None
 
     def _signed_order_to_api_dict(
         self,

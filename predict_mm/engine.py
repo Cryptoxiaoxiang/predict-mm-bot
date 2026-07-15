@@ -32,8 +32,11 @@ class MarketMakerEngine:
         self._stop = asyncio.Event()
         self._fill_events: asyncio.Queue[WalletFillEvent] = asyncio.Queue()
         self._wallet_task: asyncio.Task[None] | None = None
+        self._emergency_tasks: set[asyncio.Task[None]] = set()
         self._halted_markets: set[str] = set()
+        self._submitted_fill_settlements: set[str] = set()
         self._handled_fill_settlements: set[str] = set()
+        self._emergency_retry_base_seconds = 0.5
 
     def request_stop(self) -> None:
         self._stop.set()
@@ -84,6 +87,10 @@ class MarketMakerEngine:
                 self._wallet_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await self._wallet_task
+            for task in self._emergency_tasks:
+                task.cancel()
+            if self._emergency_tasks:
+                await asyncio.gather(*self._emergency_tasks, return_exceptions=True)
             if self.config.cancel_all_on_shutdown:
                 await self._cancel_all_known_markets()
             await self.client.close()
@@ -253,63 +260,119 @@ class MarketMakerEngine:
         if fill_size <= Decimal("0"):
             return
 
-        # Predict sends a submitted event followed by a success event for the
-        # same settlement. It is also possible for a fill to win the race with a
-        # cancellation request, so an order marked locally as cancelled must not
-        # make us discard a confirmed fill.
         settlement_key = event.settlement_id or (
             f"{event.order_id}:{event.order_hash or ''}:{fill_size}"
         )
+
+        # Submitted means the match is being settled on-chain. Stop exposing the
+        # market immediately, but do not try to sell yet: the bought ERC-1155
+        # shares do not exist in the wallet until settlement succeeds.
+        if event.event_type == "orderTransactionSubmitted":
+            if settlement_key in self._submitted_fill_settlements:
+                return
+            self._submitted_fill_settlements.add(settlement_key)
+            logger.critical(
+                "Buy order %s matched; canceling market quotes while on-chain settlement completes",
+                order.order_id,
+            )
+            await self._prepare_emergency_exit(order)
+            return
+
+        # A success event can race with a local cancellation. The order's local
+        # CANCELED state therefore must not make us discard the confirmed fill.
         if settlement_key in self._handled_fill_settlements:
             return
         self._handled_fill_settlements.add(settlement_key)
 
+        fill_size = min(fill_size, max(Decimal("0"), order.quote.size - order.filled_size))
+        if fill_size <= Decimal("0"):
+            return
         order.filled_size += fill_size
         logger.critical(
             "Detected %s for buy order %s; starting emergency exit",
             event.event_type,
             order.order_id,
         )
-        await self._emergency_exit(order, fill_size)
+        task = asyncio.create_task(self._emergency_exit(order, fill_size))
+        self._emergency_tasks.add(task)
+        task.add_done_callback(self._emergency_tasks.discard)
+
+    async def _prepare_emergency_exit(self, filled_order: ManagedOrder) -> None:
+        market_id = filled_order.quote.market_id
+        self._halted_markets.add(market_id)
+        try:
+            await self.client.cancel_all_orders(market_id)
+        except Exception as error:  # noqa: BLE001
+            logger.critical(
+                "Could not cancel all market quotes before emergency exit; "
+                "the market remains halted and the sell will still be attempted: %s",
+                error,
+            )
+            return
+        for order in self.open_orders.values():
+            if order.quote.market_id == market_id and order.status == OrderStatus.OPEN:
+                order.status = OrderStatus.CANCELED
 
     async def _emergency_exit(self, filled_order: ManagedOrder, fill_size: Decimal) -> None:
         market_id = filled_order.quote.market_id
-        self._halted_markets.add(market_id)
         logger.critical(
             "BUY order filled on %s; canceling market quotes and selling %s at emergency limit 0.01",
             market_id,
             fill_size,
         )
-        cancel_succeeded = False
-        try:
-            await self.client.cancel_all_orders(market_id)
-            cancel_succeeded = True
-        except Exception as error:  # noqa: BLE001
-            # Exiting the filled position is more important than waiting for a
-            # temporarily failing fast-cancel endpoint. The emergency order uses
-            # CANCEL_MAKER self-trade prevention as an additional safeguard.
-            logger.critical(
-                "Could not cancel all market quotes before emergency exit; "
-                "continuing with the 0.01 sell: %s",
-                error,
-            )
-        if cancel_succeeded:
-            for order in self.open_orders.values():
-                if order.quote.market_id == market_id and order.status == OrderStatus.OPEN:
-                    order.status = OrderStatus.CANCELED
+        await self._prepare_emergency_exit(filled_order)
 
-        exit_order = await self.client.create_order(
-            replace(
-                filled_order.quote,
-                side=Side.SELL,
-                price=Decimal("0.01"),
-                size=fill_size,
-            ),
-            post_only=False,
-        )
-        exit_order.is_emergency_exit = True
-        self.open_orders[exit_order.order_id] = exit_order
-        logger.critical("Emergency 0.01 sell order submitted for market %s: %s", market_id, exit_order.order_id)
+        attempt = 0
+        while not self._stop.is_set():
+            attempt += 1
+            try:
+                exit_order = await self.client.create_order(
+                    replace(
+                        filled_order.quote,
+                        side=Side.SELL,
+                        price=Decimal("0.01"),
+                        size=fill_size,
+                    ),
+                    post_only=False,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:  # noqa: BLE001
+                retry_delay = min(
+                    self._emergency_retry_base_seconds * (2 ** min(attempt - 1, 3)),
+                    5.0,
+                )
+                if "insufficient shares" in str(error).casefold():
+                    logger.critical(
+                        "Emergency sell is waiting for %s shares to become available on %s; "
+                        "retrying in %.1f seconds (attempt %s)",
+                        fill_size,
+                        market_id,
+                        retry_delay,
+                        attempt,
+                    )
+                else:
+                    logger.critical(
+                        "Emergency sell attempt %s failed on %s; retrying in %.1f seconds: %s",
+                        attempt,
+                        market_id,
+                        retry_delay,
+                        error,
+                    )
+                try:
+                    await asyncio.wait_for(self._stop.wait(), timeout=retry_delay)
+                except asyncio.TimeoutError:
+                    continue
+                return
+
+            exit_order.is_emergency_exit = True
+            self.open_orders[exit_order.order_id] = exit_order
+            logger.critical(
+                "Emergency 0.01 sell order submitted for market %s: %s",
+                market_id,
+                exit_order.order_id,
+            )
+            return
 
     async def _cancel_all_known_markets(self) -> None:
         for market in self.config.enabled_markets:

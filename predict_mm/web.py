@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from predict_mm.client import PredictClient
-from predict_mm.config import Settings, load_config
+from predict_mm.config import Settings, load_config, update_dotenv_value
 from predict_mm.engine import MarketMakerEngine
 from predict_mm.logging import configure_logging
 from predict_mm.risk import RiskManager
@@ -138,7 +138,11 @@ class DashboardState:
                 configure_logging(settings.log_level)
                 logging.getLogger().addHandler(self.log_handler)
                 self.logging_ready = True
-            client = PredictClient(settings=settings, dry_run=config.dry_run)
+            client = PredictClient(
+                settings=settings,
+                dry_run=config.dry_run,
+                jwt_token_updated=self._persist_refreshed_jwt,
+            )
             self.engine = MarketMakerEngine(
                 config=config,
                 client=client,
@@ -170,7 +174,11 @@ class DashboardState:
             return
         config = load_config(self.config_path)
         settings = Settings.from_env()
-        client = PredictClient(settings=settings, dry_run=config.dry_run)
+        client = PredictClient(
+            settings=settings,
+            dry_run=config.dry_run,
+            jwt_token_updated=self._persist_refreshed_jwt,
+        )
         try:
             for market in config.enabled_markets:
                 await client.cancel_all_orders(market.id)
@@ -190,6 +198,10 @@ class DashboardState:
             "balance": format(balance, "f"),
             "account_address": account_address,
         }
+
+    def _persist_refreshed_jwt(self, jwt_token: str) -> None:
+        """Keep an automatically refreshed JWT across web-service restarts."""
+        update_dotenv_value(self.env_path, "PREDICT_JWT_TOKEN", jwt_token)
 
     async def _trade_approval_plan(self) -> tuple[object, list[object]]:
         """Build the minimal official-SDK approval plan for configured markets."""

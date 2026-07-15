@@ -6,7 +6,7 @@ import signal
 from pathlib import Path
 
 from predict_mm.client import PredictClient
-from predict_mm.config import Settings, load_config
+from predict_mm.config import Settings, load_config, update_dotenv_value
 from predict_mm.engine import MarketMakerEngine
 from predict_mm.logging import configure_logging
 from predict_mm.risk import RiskManager
@@ -40,7 +40,13 @@ async def async_main() -> None:
     configure_logging(settings.log_level)
     config = load_config(config_path)
 
-    client = PredictClient(settings=settings, dry_run=config.dry_run)
+    client = PredictClient(
+        settings=settings,
+        dry_run=config.dry_run,
+        jwt_token_updated=lambda token: update_dotenv_value(
+            env_path, "PREDICT_JWT_TOKEN", token
+        ),
+    )
     engine = MarketMakerEngine(
         config=config,
         client=client,

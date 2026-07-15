@@ -4,7 +4,15 @@ from time import monotonic
 
 from predict_mm.config import BotConfig, MarketConfig, RiskConfig, StrategyConfig
 from predict_mm.engine import MarketMakerEngine
-from predict_mm.models import Level, ManagedOrder, OrderBook, Quote, Side, WalletFillEvent
+from predict_mm.models import (
+    Level,
+    ManagedOrder,
+    OrderBook,
+    OrderStatus,
+    Quote,
+    Side,
+    WalletFillEvent,
+)
 from predict_mm.risk import RiskManager
 from predict_mm.strategy import PassiveMakerStrategy
 

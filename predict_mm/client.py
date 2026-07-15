@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import asdict, is_dataclass, replace
 import html
 import json
 import logging
+import os
 import re
 import urllib.request
 from decimal import Decimal
@@ -19,6 +21,10 @@ from predict_mm.models import Level, ManagedOrder, OrderBook, OrderStatus, Quote
 logger = logging.getLogger("predict-mm")
 
 
+class PredictAuthorizationError(RuntimeError):
+    """A protected Predict REST request was rejected with HTTP 401."""
+
+
 class PredictClient:
     """Predict.fun REST + SDK adapter.
 
@@ -26,10 +32,17 @@ class PredictClient:
     ``predict-sdk`` package to build and sign orders before POSTing them to the order API.
     """
 
-    def __init__(self, settings: Settings, dry_run: bool) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        dry_run: bool,
+        jwt_token_updated: Callable[[str], None] | None = None,
+    ) -> None:
         self.settings = settings
         self.dry_run = dry_run
         self.base_url = settings.api_base_url.rstrip("/")
+        self._jwt_token_updated = jwt_token_updated
+        self._jwt_refresh_lock = asyncio.Lock()
         self._dry_orders: dict[str, ManagedOrder] = {}
         self._market_metadata: dict[str, dict] = {}
 
@@ -266,6 +279,7 @@ class PredictClient:
         except ImportError as error:
             raise RuntimeError("WebSocket support requires the websockets package.") from error
 
+        subscribed_jwt = self.settings.jwt_token
         async with connect(
             "wss://ws.predict.fun/ws",
             additional_headers={"x-api-key": self.settings.api_key},
@@ -275,12 +289,23 @@ class PredictClient:
                     {
                         "method": "subscribe",
                         "requestId": 1,
-                        "params": [f"predictWalletEvents/{self.settings.jwt_token}"],
+                        "params": [f"predictWalletEvents/{subscribed_jwt}"],
                     }
                 )
             )
             async for raw_message in websocket:
                 message = json.loads(raw_message)
+                if self.settings.jwt_token != subscribed_jwt:
+                    logger.info("JWT 已更新，正在重新连接钱包事件流。")
+                    return
+                error = message.get("error") if isinstance(message, dict) else None
+                if (
+                    isinstance(error, dict)
+                    and error.get("code") == "invalid_credentials"
+                ):
+                    logger.warning("钱包事件流拒绝了旧 JWT，正在自动重新生成。")
+                    await self._refresh_jwt(subscribed_jwt)
+                    return
                 if message.get("method") == "heartbeat":
                     await websocket.send(json.dumps({"method": "heartbeat", "data": message.get("data")}))
                     continue
@@ -357,14 +382,62 @@ class PredictClient:
         payload: dict | None = None,
         query: dict[str, object] | None = None,
     ) -> dict:
-        for attempt in range(3):
+        authorization_retried = False
+        while True:
+            failed_token = self.settings.jwt_token
             try:
-                return await asyncio.to_thread(self._request_sync, method, path, payload, query)
-            except requests.RequestException:
-                if attempt == 2:
+                for attempt in range(3):
+                    try:
+                        return await asyncio.to_thread(
+                            self._request_sync, method, path, payload, query
+                        )
+                    except requests.RequestException:
+                        if attempt == 2:
+                            raise
+                        await asyncio.sleep(0.25 * (2**attempt))
+            except PredictAuthorizationError:
+                if (
+                    authorization_retried
+                    or not self._uses_wallet_jwt(path)
+                    or not self._can_refresh_jwt()
+                ):
                     raise
-                await asyncio.sleep(0.25 * (2**attempt))
-        raise RuntimeError("unreachable")
+                logger.warning("Predict.fun JWT 已失效，正在自动重新生成并重试请求。")
+                await self._refresh_jwt(failed_token)
+                authorization_retried = True
+
+    def _can_refresh_jwt(self) -> bool:
+        return bool(self.settings.api_key and self.settings.private_key)
+
+    @staticmethod
+    def _uses_wallet_jwt(path: str) -> bool:
+        return path == "/v1/orders" or path.startswith(
+            ("/v1/orders/", "/v1/positions", "/v1/account")
+        )
+
+    async def _refresh_jwt(self, failed_token: str | None) -> None:
+        async with self._jwt_refresh_lock:
+            if self.settings.jwt_token and self.settings.jwt_token != failed_token:
+                return
+            if not self.settings.private_key:
+                raise RuntimeError("钱包 Private Key 未保存，无法自动重新生成 JWT。")
+
+            if self.settings.predict_account_address:
+                token = await self.create_predict_account_jwt(
+                    self.settings.private_key,
+                    self.settings.predict_account_address,
+                )
+            else:
+                token = await self.create_eoa_jwt(self.settings.private_key)
+
+            self.settings = replace(self.settings, jwt_token=token)
+            os.environ["PREDICT_JWT_TOKEN"] = token
+            if self._jwt_token_updated is not None:
+                try:
+                    self._jwt_token_updated(token)
+                except Exception as error:  # noqa: BLE001
+                    logger.warning("新 JWT 已生效，但保存到配置文件失败：%s", error)
+            logger.info("Predict.fun JWT 已自动更新。")
 
     def _request_sync(
         self,
@@ -410,7 +483,8 @@ class PredictClient:
             )
             detail = re.sub(r"\s+", " ", detail)[:300]
             suffix = f"：{detail}" if detail else ""
-            raise RuntimeError(
+            error_type = PredictAuthorizationError if response.status_code == 401 else RuntimeError
+            raise error_type(
                 f"Predict.fun 拒绝了 {method} {path} 请求（HTTP {response.status_code}）{suffix}"
             )
 

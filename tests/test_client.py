@@ -3,7 +3,7 @@ import asyncio
 import json
 from unittest.mock import Mock, patch
 
-from predict_mm.client import PredictClient
+from predict_mm.client import PredictAuthorizationError, PredictClient
 from predict_mm.config import Settings
 from predict_mm.models import Quote, Side
 
@@ -56,6 +56,79 @@ def test_rest_request_surfaces_predict_error_message() -> None:
             assert "browser's signature" in str(error)
         else:
             raise AssertionError("expected HTTP 403 to be surfaced")
+
+
+def test_protected_request_refreshes_expired_jwt_and_retries_once() -> None:
+    refreshed_tokens: list[str] = []
+
+    class StubClient(PredictClient):
+        def __init__(self) -> None:
+            super().__init__(
+                Settings(
+                    api_key="api-key",
+                    jwt_token="expired-jwt",
+                    private_key="private-key",
+                    predict_account_address="0xpredict-account",
+                ),
+                dry_run=False,
+                jwt_token_updated=refreshed_tokens.append,
+            )
+            self.request_count = 0
+
+        def _request_sync(self, method, path, payload=None, query=None):  # type: ignore[no-untyped-def]
+            self.request_count += 1
+            if self.request_count == 1:
+                raise PredictAuthorizationError("HTTP 401: authorization error")
+            assert self.settings.jwt_token == "fresh-jwt"
+            return {"data": []}
+
+        async def create_predict_account_jwt(self, private_key, predict_account_address):  # type: ignore[no-untyped-def]
+            assert private_key == "private-key"
+            assert predict_account_address == "0xpredict-account"
+            return "fresh-jwt"
+
+    client = StubClient()
+    with patch.dict("os.environ", {}, clear=False):
+        result = asyncio.run(client._request("GET", "/v1/orders"))
+        assert client.settings.jwt_token == "fresh-jwt"
+
+    assert result == {"data": []}
+    assert client.request_count == 2
+    assert refreshed_tokens == ["fresh-jwt"]
+
+
+def test_protected_request_does_not_loop_after_refreshed_jwt_is_rejected() -> None:
+    class StubClient(PredictClient):
+        def __init__(self) -> None:
+            super().__init__(
+                Settings(
+                    api_key="api-key",
+                    jwt_token="expired-jwt",
+                    private_key="private-key",
+                ),
+                dry_run=False,
+            )
+            self.request_count = 0
+            self.refresh_count = 0
+
+        def _request_sync(self, method, path, payload=None, query=None):  # type: ignore[no-untyped-def]
+            self.request_count += 1
+            raise PredictAuthorizationError("HTTP 401: authorization error")
+
+        async def create_eoa_jwt(self, private_key):  # type: ignore[no-untyped-def]
+            self.refresh_count += 1
+            return "fresh-jwt"
+
+    client = StubClient()
+    try:
+        asyncio.run(client._request("GET", "/v1/orders"))
+    except PredictAuthorizationError:
+        pass
+    else:
+        raise AssertionError("expected the retried request to surface the second 401")
+
+    assert client.request_count == 2
+    assert client.refresh_count == 1
 
 
 def test_balance_requires_saved_private_key() -> None:

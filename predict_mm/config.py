@@ -113,6 +113,28 @@ def load_dotenv(path: Path) -> None:
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
+def update_dotenv_value(path: str | Path, key: str, value: str) -> None:
+    """Update one dotenv value without rewriting unrelated account settings."""
+    if "\n" in value or "\r" in value:
+        raise ValueError("dotenv values must not contain newlines")
+    env_path = Path(path)
+    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    updated = False
+    for index, raw_line in enumerate(lines):
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        current_key, _ = stripped.split("=", 1)
+        if current_key.strip() != key:
+            continue
+        lines[index] = f"{key}={value}"
+        updated = True
+        break
+    if not updated:
+        lines.append(f"{key}={value}")
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _decimal(value: object, default: str) -> Decimal:
     return Decimal(str(value if value is not None else default))
 

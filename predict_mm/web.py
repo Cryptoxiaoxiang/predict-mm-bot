@@ -483,9 +483,12 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
             markets: list[dict] = []
             if settings.api_key:
                 try:
-                    markets = await client.search_markets(slug)
+                    markets = _markets_matching_slug(await client.search_markets(slug), slug)
                     if not markets:
-                        markets = await client.search_markets(_search_query_from_slug(slug))
+                        markets = _markets_matching_slug(
+                            await client.search_markets(_search_query_from_slug(slug)),
+                            slug,
+                        )
                 except Exception as error:  # noqa: BLE001
                     api_search_failed = True
                     logging.getLogger("predict-mm").warning("官方市场搜索不可用，改用公开页面: %s", error)
@@ -588,6 +591,31 @@ def _search_query_from_slug(slug: str) -> str:
     without_timestamp = re.sub(r"[-_]\d{8,}$", "", slug)
     query = re.sub(r"[-_]+", " ", without_timestamp).strip()
     return query or slug
+
+
+def _markets_matching_slug(markets: list[dict], slug: str) -> list[dict]:
+    """Keep only markets that belong to the exact Predict.fun URL."""
+    expected = slug.strip().lower()
+    matches: list[dict] = []
+    seen_ids: set[str] = set()
+    for market in markets:
+        category = market.get("category")
+        category_values: tuple[object, ...] = ()
+        if isinstance(category, dict):
+            category_values = (category.get("slug"), category.get("id"))
+        candidates = (
+            market.get("slug"),
+            market.get("categorySlug"),
+            *category_values,
+        )
+        if not any(str(value or "").strip().lower() == expected for value in candidates):
+            continue
+        market_id = str(market.get("id") or "")
+        if not market_id or market_id in seen_ids:
+            continue
+        matches.append(market)
+        seen_ids.add(market_id)
+    return matches
 
 
 def _market_lookup_result(market: dict) -> dict[str, object]:

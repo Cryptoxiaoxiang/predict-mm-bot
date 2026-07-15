@@ -3,6 +3,7 @@ from predict_mm.web import (
     SetupPayload,
     _market_lookup_result,
     _market_slug_from_url,
+    _markets_matching_slug,
     _search_query_from_slug,
     _validate_setup,
 )
@@ -31,6 +32,32 @@ def test_market_slug_rejects_non_predict_url() -> None:
 
 def test_search_query_removes_url_timestamp() -> None:
     assert _search_query_from_slug("btc-updown-15m-1783927800") == "btc updown 15m"
+
+
+def test_market_url_results_are_filtered_to_the_exact_slug() -> None:
+    slug = "dota2-vg-playti-2026-07-14"
+    markets = [
+        {"id": 1, "slug": "another-dota2-market"},
+        {"id": 2, "categorySlug": slug, "title": "Match winner"},
+        {"id": 3, "category": {"slug": slug}, "title": "Game 1 winner"},
+        {"id": 4, "category": {"id": slug}, "title": "Total maps"},
+        {"id": 5, "categorySlug": "dota2-vg-another-team-2026-07-14"},
+    ]
+
+    matches = _markets_matching_slug(markets, slug)
+
+    assert [market["id"] for market in matches] == [2, 3, 4]
+
+
+def test_market_url_filter_accepts_the_exact_market_slug() -> None:
+    slug = "btc-updown-15m-1783927800"
+
+    matches = _markets_matching_slug(
+        [{"id": 42, "slug": slug}, {"id": 43, "slug": "btc-updown-15m-1783928700"}],
+        slug,
+    )
+
+    assert [market["id"] for market in matches] == [42]
 
 
 def test_market_lookup_exposes_all_outcomes_for_user_selection() -> None:

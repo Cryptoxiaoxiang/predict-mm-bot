@@ -151,7 +151,26 @@ class MarketMakerEngine:
             ]
             approved = self.risk.filter_quotes(missing_quotes, active, positions)
             for quote in approved:
-                order = await self.client.create_order(quote)
+                try:
+                    order = await self.client.create_order(quote)
+                except Exception as error:  # noqa: BLE001
+                    # A rejected passive quote must not bring down the wallet
+                    # event stream. In particular, available collateral can
+                    # change between risk evaluation and API submission while a
+                    # different order is settling. Keeping the engine alive is
+                    # essential so a later settlement-success event can still
+                    # trigger the emergency exit.
+                    logger.warning(
+                        "Create quote failed on %s (%s %s %s @ %s); "
+                        "skipping this quote and keeping the bot running: %s",
+                        quote.market_id,
+                        quote.side.value,
+                        quote.size,
+                        quote.outcome,
+                        quote.price,
+                        error,
+                    )
+                    continue
                 self.open_orders[order.order_id] = order
 
     async def _cancel_orders_approached_by_market(self, market_id: str, orderbook: OrderBook) -> None:

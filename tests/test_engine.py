@@ -200,6 +200,44 @@ def test_tick_only_adds_the_missing_dual_outcome_quote() -> None:
     assert [(quote.side, quote.outcome) for quote in client.created] == [(Side.BUY, "No")]
 
 
+def test_rejected_passive_quote_does_not_stop_tick_or_fill_monitoring(caplog) -> None:
+    class PartiallyFundedClient(RepriceClient):
+        async def create_order(self, quote: Quote, *, post_only: bool = True) -> ManagedOrder:
+            if quote.market_id == "market-1":
+                raise RuntimeError(
+                    "HTTP 400: Insufficient collateral: available balance is less than the total bid amount."
+                )
+            return await super().create_order(quote, post_only=post_only)
+
+        async def get_orderbook(self, market_id: str) -> OrderBook:
+            return OrderBook(
+                market_id=market_id,
+                bids=[Level(Decimal("0.49"), Decimal("100"))],
+                asks=[Level(Decimal("0.55"), Decimal("100"))],
+                tick_size=Decimal("0.01"),
+            )
+
+    client = PartiallyFundedClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(
+            markets=[
+                MarketConfig(id="market-1"),
+                MarketConfig(id="market-2"),
+            ]
+        ),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+
+    with caplog.at_level("WARNING", logger="predict-mm"):
+        asyncio.run(engine._tick())
+
+    assert [quote.market_id for quote in client.created] == ["market-2"]
+    assert list(engine.open_orders) == ["new-1"]
+    assert "keeping the bot running" in caplog.text
+
+
 def test_approached_buy_quote_is_canceled_and_repriced_in_same_tick() -> None:
     client = RepriceClient()
     engine = MarketMakerEngine(

@@ -7,132 +7,107 @@
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <main class="shell">
-      <header>
-        <div>
-          <p class="eyebrow">PREDICT.FUN</p>
-          <h1>自动挂单控制台</h1>
-          <p class="subtitle">先模拟，再实盘。私钥只保存在这台服务器。</p>
-        </div>
-        <div id="mode-badge" class="badge">正在检查配置</div>
-      </header>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand"><div class="brand-logo">P</div><div><strong>Predict MM</strong><small>AUTO MARKET MAKER</small></div></div>
+        <div class="nav-label">控制中心</div>
+        <nav class="nav" aria-label="控制台页面">
+          <button class="active" data-view="dashboard"><svg viewBox="0 0 24 24"><path d="M4 13h6V4H4v9Zm0 7h6v-4H4v4Zm10 0h6v-9h-6v9Zm0-16v4h6V4h-6Z" /></svg>总览 Dashboard</button>
+          <button data-view="account"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4" /><path d="M4.5 20c.8-4 3.3-6 7.5-6s6.7 2 7.5 6" /></svg>账户设置</button>
+          <button data-view="quotes"><svg viewBox="0 0 24 24"><path d="M4 7h16M7 4v6m10 4v6M4 17h16" /></svg>挂单设置<span id="market-count" class="nav-count">0</span></button>
+          <button data-view="logs"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5" /></svg>运行日志</button>
+        </nav>
+        <div class="sidebar-spacer"></div>
+        <div class="server-card"><strong>网页服务正常</strong><p id="sidebar-account">账户状态检查中</p><small>页面每 2 秒更新</small></div>
+      </aside>
 
-      <section class="dashboard" aria-label="机器人状态">
-        <article><span>状态</span><strong id="run-status">未配置</strong></article>
-        <article><span>已配置市场</span><strong id="market-value">—</strong></article>
-        <article title="账户地址上的链上 USDT 余额；不含预测持仓的市值。"><span>账户 USDT 余额</span><strong id="balance-value">读取中…</strong><small id="balance-note" class="muted">每 30 秒刷新</small></article>
-      </section>
+      <main class="main"><div class="content">
+        <section id="notice" class="notice" hidden></section>
 
-      <section id="notice" class="notice" hidden></section>
+        <section id="dashboard" class="view active">
+          <header class="topbar">
+            <div><p class="eyebrow">PREDICT.FUN CONTROL CENTER</p><h1>总览 Dashboard</h1><p class="subtitle">监控机器人、挂单与风险状态</p></div>
+            <div class="actions"><div id="mode-badge" class="pill">正在检查配置</div><button id="start-button" class="btn primary">启动机器人</button><button id="stop-button" class="btn secondary">停止并撤单</button></div>
+          </header>
 
-      <details class="card account-card">
-        <summary class="account-summary">
-          <div>
-            <h2>账户设置</h2>
-            <p>仅实盘需要。点击展开账户与密钥配置。</p>
-          </div>
-          <div class="account-summary-side"><span id="secret-status" class="muted"></span><span class="account-chevron" aria-hidden="true">⌄</span></div>
-        </summary>
-        <div class="account-content">
-          <form id="account-form">
-            <div class="form-grid">
-              <label>API Key<input name="api_key" type="password" autocomplete="off" placeholder="留空则不修改" /></label>
-              <label>钱包 Private Key<input name="private_key" type="password" autocomplete="off" placeholder="EOA 私钥；Predict Account 请填 Privy 导出的私钥" /></label>
-              <label>Predict Account Address<input name="predict_account_address" placeholder="使用 Predict Account 时填写存款地址；EOA 留空" /></label>
-              <label>日志级别<select name="log_level"><option>INFO</option><option>DEBUG</option><option>WARNING</option><option>ERROR</option></select></label>
-            </div>
-            <p class="details-note">保存时会自动生成 JWT：若填写 Predict Account Address，会使用该账户设置中导出的 Privy Wallet 私钥生成智能钱包签名；否则使用 EOA 私钥。私钥不会写入日志。</p>
-            <button class="primary" type="submit">保存账户设置</button>
-          </form>
-          <section class="approval-panel" aria-labelledby="approval-heading">
-            <div class="section-heading">
-              <div>
-                <h3 id="approval-heading">交易授权</h3>
-                <p>实盘下单前需要。检查只读取链上状态；设置授权会发送链上交易，但不会创建订单。</p>
-              </div>
-              <strong id="approval-status" class="muted">尚未检查</strong>
-            </div>
-            <div id="approval-steps" class="approval-steps" aria-live="polite"></div>
-            <div id="gas-wallet" class="gas-wallet" hidden></div>
-            <div class="button-row">
-              <button id="check-approvals" class="secondary" type="button">检查交易授权</button>
-              <button id="set-approvals" class="danger" type="button">设置交易授权</button>
-            </div>
-            <p class="details-note">程序化设置授权由 Privy 签名钱包（EOA 模式则为 EOA 钱包）支付 BNB Chain Gas。网页交易可能使用不同的代付流程。请按上方检查结果操作，不要把 Gas 误转到 Predict Account Address。</p>
+          <section class="metrics" aria-label="机器人状态">
+            <article class="metric"><div class="metric-label">机器人状态</div><strong id="run-status" class="metric-value warning">未配置</strong><div id="run-status-note" class="metric-note">正在读取运行状态</div></article>
+            <article class="metric" title="账户地址上的链上 USDT 余额；不含预测持仓的市值。"><div class="metric-label">账户 USDT 余额</div><strong id="balance-value" class="metric-value">读取中…</strong><div id="balance-note" class="metric-note">每 30 秒刷新</div></article>
+            <article class="metric"><div class="metric-label">当前开放订单</div><strong id="open-order-value" class="metric-value positive">0</strong><div id="open-order-note" class="metric-note">暂无机器人管理的挂单</div></article>
+            <article class="metric"><div class="metric-label">已配置市场</div><strong id="market-value" class="metric-value">—</strong><div id="configured-note" class="metric-note">等待加载配置</div></article>
           </section>
-        </div>
-      </details>
 
-      <section class="card controls">
-        <div>
-          <h2>运行控制</h2>
-          <p>启动前请确认当前模式和市场信息。</p>
-        </div>
-        <div class="button-row">
-          <button id="start-button" class="primary">启动机器人</button>
-          <button id="stop-button" class="secondary">停止并撤单</button>
-          <button id="cancel-button" class="danger">撤销所有市场订单</button>
-        </div>
-      </section>
-
-      <section class="card open-orders-card">
-        <div class="section-heading">
-          <div>
-            <h2>当前挂单市场</h2>
-            <p>仅显示机器人当前管理的开放订单；手动创建的订单不会显示在这里。</p>
-          </div>
-          <span id="open-orders-summary" class="muted">暂无挂单</span>
-        </div>
-        <div id="open-orders-list" class="open-orders-list" aria-live="polite"></div>
-      </section>
-
-      <section class="card">
-        <div class="section-heading">
-          <div>
-            <h2>首次配置 / 修改配置</h2>
-            <p>先配置市场和风险限制，再保存。</p>
-          </div>
-        </div>
-        <form id="setup-form">
-          <div class="market-section">
-            <div class="section-heading">
-              <div>
-                <h3>做市市场</h3>
-                <p>选 Yes 或 No 只挂对应选项；选 Yes &amp; No 才会双向挂单。保存后会同时运行。</p>
-              </div>
-              <button id="add-market-button" class="secondary" type="button">+ 添加市场</button>
+          <div class="dashboard-grid">
+            <section class="card orders-card">
+              <div class="card-head"><div><h2>当前挂单</h2><p>机器人当前管理的开放订单</p></div><span id="open-orders-summary" class="summary">暂无挂单</span></div>
+              <div class="card-body table-wrap"><table><thead><tr><th>市场</th><th>方向</th><th>价格</th><th>数量</th><th>状态</th></tr></thead><tbody id="open-orders-list" aria-live="polite"></tbody></table></div>
+            </section>
+            <div class="stack">
+              <section class="card"><div class="card-head"><div><h2>风险状态</h2><p>当前保存的仓位与成交保护</p></div><span class="status-badge"><span class="dot"></span>已加载</span></div><div class="card-body risk-list">
+                <div class="risk-row"><strong>总最大仓位</strong><span id="risk-total">—</span></div>
+                <div class="risk-row"><strong>单市场最大仓位</strong><span id="risk-market">—</span></div>
+                <div class="risk-row"><strong>买单被吃单后立即卖出</strong><span id="risk-emergency">—</span></div>
+              </div></section>
+              <section class="card"><div class="card-head"><div><h2>最新日志</h2><p>最近的运行信息</p></div><button class="text-button" data-view-target="logs">全部日志</button></div><div class="card-body"><pre id="dashboard-logs" class="log-preview">等待日志…</pre></div></section>
             </div>
-            <div id="markets-list" class="market-list"></div>
           </div>
+          <div class="dashboard-actions"><button id="cancel-button" class="btn danger">撤销所有市场订单</button></div>
+        </section>
 
-          <div class="form-grid">
-            <label>单市场最大仓位<input name="max_position_per_market" inputmode="decimal" value="10.0" required /></label>
-            <label>总最大仓位<input name="max_total_position" inputmode="decimal" value="50.0" required /></label>
-            <label><span class="label-with-help">撤单等待秒数 <span class="tooltip" tabindex="0" aria-label="查看撤单等待秒数说明">?<span class="tooltip-text" role="tooltip">每笔挂单最多保留多久。到达这个时间后，机器人会撤单并根据最新盘口重新报价。首次建议保持 8 秒。</span></span></span><input name="cancel_after_seconds" inputmode="decimal" value="8" required /></label>
-          </div>
+        <section id="account" class="view">
+          <header class="topbar"><div><p class="eyebrow">ACCOUNT</p><h1>账户设置</h1><p class="subtitle">账户信息单独保存，密钥不会显示完整内容</p></div><div id="account-badge" class="pill">正在检查账户</div></header>
+          <section class="card page-card form-card">
+            <div class="section-title"><div><h2>Predict.fun 账户</h2><p>保存后自动生成并维护 JWT</p></div><span id="secret-status" class="summary">尚未保存实盘密钥</span></div>
+            <form id="account-form">
+              <div class="form-grid">
+                <label class="field"><span>API Key</span><input name="api_key" type="password" autocomplete="off" placeholder="留空则保留原值" /><small>与申请时使用的 Predict 账户相匹配</small></label>
+                <label class="field"><span>钱包 Private Key</span><input name="private_key" type="password" autocomplete="off" placeholder="EOA 私钥；Predict Account 请填 Privy 导出的私钥" /><small>不会写入日志或上传 GitHub</small></label>
+                <label class="field"><span>Predict Account Address</span><input name="predict_account_address" placeholder="使用 Predict Account 时填写存款地址；EOA 留空" /></label>
+                <label class="field"><span>日志级别</span><select name="log_level"><option>INFO</option><option>DEBUG</option><option>WARNING</option><option>ERROR</option></select></label>
+              </div>
+              <p class="details-note">保存时会自动生成 JWT：填写 Predict Account Address 时使用 Privy Wallet 私钥生成智能钱包签名，否则使用 EOA 私钥。私钥只保存在服务器。</p>
+              <div class="form-actions"><button class="btn primary" type="submit">保存账户设置</button></div>
+            </form>
+          </section>
+          <section class="card page-card form-card approval-panel" aria-labelledby="approval-heading">
+            <div class="section-title"><div><h2 id="approval-heading">交易授权</h2><p>实盘下单前需要；检查操作不会创建订单</p></div><strong id="approval-status" class="summary">尚未检查</strong></div>
+            <div id="approval-steps" class="approval-steps" aria-live="polite"></div><div id="gas-wallet" class="gas-wallet" hidden></div>
+            <p class="details-note">设置授权会发送链上交易，并由 Privy 签名钱包（EOA 模式为 EOA 钱包）支付 BNB Chain Gas。</p>
+            <div class="form-actions"><button id="check-approvals" class="btn secondary" type="button">检查交易授权</button><button id="set-approvals" class="btn danger" type="button">设置交易授权</button></div>
+          </section>
+        </section>
 
-          <label class="switch"><input type="checkbox" name="dry_run" /><span>使用模拟运行（不会真实下单）</span></label>
-          <label class="switch warning-switch"><input type="checkbox" name="emergency_exit_on_buy_fill" checked /><span class="label-with-help">买单被吃单后，立即以 0.01 紧急卖出 <span class="tooltip" tabindex="0" aria-label="查看紧急卖出说明">?<span class="tooltip-text" role="tooltip">实盘专用。买单被吃单（包括部分成交）时，机器人会撤掉该市场其他订单、停止继续报价，并以 0.01 的非 post-only 卖单卖出已成交数量。这可能会造成损失，仅在你明确接受此风险时开启。</span></span></span></label>
+        <section id="quotes" class="view">
+          <header class="topbar"><div><p class="eyebrow">QUOTE SETTINGS</p><h1>挂单设置</h1><p class="subtitle">管理做市市场、挂单数量和刷新策略</p></div><button id="add-market-button" class="btn primary" type="button">＋ 添加市场</button></header>
+          <form id="setup-form">
+            <section class="card form-card"><div class="section-title"><div><h2>做市市场</h2><p>选择 Yes 或 No 只挂对应选项；选择 Yes &amp; No 才会双向挂单</p></div><span id="configured-market-summary" class="summary">尚未配置市场</span></div><div id="markets-list" class="market-list"></div></section>
+            <section class="card form-card"><div class="section-title"><div><h2>仓位与刷新</h2><p>所有市场共用的风险限制</p></div></div>
+              <div class="form-grid three-columns">
+                <label class="field"><span>单市场最大仓位</span><input name="max_position_per_market" inputmode="decimal" value="10.0" required /></label>
+                <label class="field"><span>总最大仓位</span><input name="max_total_position" inputmode="decimal" value="50.0" required /></label>
+                <label class="field"><span class="label-with-help">撤单等待秒数 <span class="tooltip" tabindex="0">?<span class="tooltip-text" role="tooltip">每笔挂单最多保留多久。到达该时间后，机器人会撤单并根据最新盘口重新报价。</span></span></span><input name="cancel_after_seconds" inputmode="decimal" value="8" required /></label>
+              </div>
+              <label class="switch-row"><span><strong>买单被吃单后立即卖出</strong><small>包括 Yes 与 No；成交保护启用后会停止对应市场继续报价</small></span><span class="switch-control"><input type="checkbox" name="emergency_exit_on_buy_fill" checked /><i></i></span><span class="tooltip" tabindex="0">?<span class="tooltip-text" role="tooltip">实盘专用。买单被吃单（包括部分成交）时，机器人会撤掉该市场其他订单，并以 0.01 的非 post-only 限价卖单卖出已成交数量。这可能会造成损失。</span></span></label>
+              <label class="switch-row"><span><strong>模拟运行</strong><small>开启后只计算报价和写入日志，不会创建真实订单</small></span><span class="switch-control"><input type="checkbox" name="dry_run" /><i></i></span></label>
+              <div class="form-actions"><button class="btn primary" type="submit">保存挂单设置</button></div>
+            </section>
+          </form>
+        </section>
 
-          <button class="primary" type="submit">保存配置</button>
-        </form>
-      </section>
+        <section id="logs-view" class="view" data-view-name="logs">
+          <header class="topbar"><div><p class="eyebrow">SYSTEM LOGS</p><h1>运行日志</h1><p class="subtitle">查看机器人、订单和成交保护的完整记录</p></div><div class="actions"><span class="status-badge"><span class="dot"></span>每 2 秒更新</span><button id="refresh-logs" class="btn primary">刷新</button></div></header>
+          <section class="card page-card"><div class="card-head"><div><h2>实时日志</h2><p>仅显示当前网页服务保留的最近记录</p></div></div><div class="card-body"><pre id="logs" class="full-log">等待日志…</pre></div></section>
+        </section>
+      </div></main>
+    </div>
 
-      <section class="card logs-card">
-        <div class="section-heading"><div><h2>运行日志</h2><p>每 2 秒自动刷新。</p></div><button id="refresh-logs" class="text-button">刷新</button></div>
-        <pre id="logs">等待日志…</pre>
-      </section>
-    </main>
     <template id="market-template">
       <article class="market-row">
-        <div class="market-row-heading">
-          <strong class="market-title">市场</strong>
-          <button class="text-button remove-market" type="button">移除</button>
-        </div>
-        <div class="form-grid">
-          <label class="market-id-field"><span class="label-with-help">市场网址 / Market ID <span class="tooltip" tabindex="0" aria-label="查看市场网址说明">?<span class="tooltip-text" role="tooltip">可直接粘贴 Predict.fun 市场页面的网址，例如 https://predict.fun/market/xxx 或 https://predict.fun/zh-cn/market/xxx；系统会自动查找并填入数字 Market ID。也可以直接输入数字 ID。</span></span></span><div class="market-id-input"><input data-field="market_id" required placeholder="粘贴 predict.fun 市场网址，或输入数字 ID" /><button class="secondary resolve-market" type="button">识别网址</button></div><div class="market-lookup-result" data-field="market_lookup" hidden></div></label>
-          <label>挂单选项<select data-field="outcome"><option>YES</option><option>NO</option><option value="YES_NO">Yes &amp; No（双向）</option></select></label>
-          <label>单次挂单数量<input data-field="quote_size" inputmode="decimal" value="1.0" required /></label>
+        <div class="market-row-heading"><strong class="market-title">市场</strong><button class="text-button remove-market" type="button">移除</button></div>
+        <div class="market-fields">
+          <label class="field market-id-field"><span class="label-with-help">市场网址 / Market ID <span class="tooltip" tabindex="0">?<span class="tooltip-text" role="tooltip">可直接粘贴 Predict.fun 市场网址，程序会自动获取 Market ID；也可以直接输入数字 ID。</span></span></span><div class="market-id-input"><input data-field="market_id" required placeholder="粘贴市场网址，或输入数字 ID" /><button class="btn secondary resolve-market" type="button">识别网址</button></div><div class="market-lookup-result" data-field="market_lookup" hidden></div></label>
+          <label class="field"><span>挂单选项</span><select data-field="outcome"><option>YES</option><option>NO</option><option value="YES_NO">Yes &amp; No（双向）</option></select></label>
+          <label class="field"><span>单次挂单数量</span><input data-field="quote_size" inputmode="decimal" value="1.0" required /></label>
         </div>
       </article>
     </template>

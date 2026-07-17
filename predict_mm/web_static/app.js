@@ -10,6 +10,24 @@ const setApprovalsButton = document.querySelector('#set-approvals');
 let formDirty = false;
 let approvalActionRunning = false;
 
+function switchView(name) {
+  const target = document.querySelector(`[data-view-name="${name}"]`) || document.getElementById(name);
+  if (!target) return;
+  document.querySelectorAll('.view').forEach((view) => view.classList.remove('active'));
+  document.querySelectorAll('.nav button[data-view]').forEach((button) => {
+    button.classList.toggle('active', button.dataset.view === name);
+  });
+  target.classList.add('active');
+  window.scrollTo({top: 0, behavior: 'smooth'});
+}
+
+document.querySelectorAll('.nav button[data-view]').forEach((button) => {
+  button.addEventListener('click', () => switchView(button.dataset.view));
+});
+document.querySelectorAll('[data-view-target]').forEach((button) => {
+  button.addEventListener('click', () => switchView(button.dataset.viewTarget));
+});
+
 function showNotice(message, kind = 'success') {
   notice.hidden = false;
   notice.className = `notice ${kind}`;
@@ -196,26 +214,55 @@ function renderOpenOrders(orders = []) {
   const list = document.querySelector('#open-orders-list');
   const summary = document.querySelector('#open-orders-summary');
   list.replaceChildren();
-  summary.textContent = orders.length ? `${orders.length} 笔挂单` : '暂无挂单';
+  const marketCount = new Set(orders.map((order) => order.market_id)).size;
+  summary.textContent = orders.length ? `每 2 秒刷新 · ${orders.length} 笔` : '暂无挂单';
+  document.querySelector('#open-order-value').textContent = orders.length;
+  document.querySelector('#open-order-note').textContent = orders.length
+    ? `分布在 ${marketCount} 个市场`
+    : '暂无机器人管理的挂单';
   if (!orders.length) {
-    const empty = document.createElement('p');
-    empty.className = 'empty-state';
-    empty.textContent = '机器人当前没有管理中的挂单。';
-    list.append(empty);
+    const row = document.createElement('tr');
+    row.className = 'empty-row';
+    const cell = document.createElement('td');
+    cell.colSpan = 5;
+    cell.textContent = '机器人当前没有管理中的挂单。';
+    row.append(cell);
+    list.append(row);
     return;
   }
   orders.forEach((order) => {
-    const row = document.createElement('article');
-    row.className = 'open-order-row';
-    const name = document.createElement('strong');
-    const side = order.side === 'buy' ? '买入' : '卖出';
-    name.textContent = `市场 ${order.market_id} · ${side} ${order.outcome}`;
-    const details = document.createElement('span');
-    const labels = [`价格 ${order.price}`, `数量 ${order.size}`, `订单 ${order.order_id}`];
-    if (order.is_emergency_exit) labels.push('紧急卖单');
-    details.textContent = labels.join(' · ');
-    if (order.is_emergency_exit) details.className = 'emergency';
-    row.append(name, details);
+    const row = document.createElement('tr');
+    const marketCell = document.createElement('td');
+    const market = document.createElement('div');
+    market.className = 'market-cell';
+    const token = document.createElement('div');
+    token.className = 'token';
+    token.textContent = order.outcome || '—';
+    const marketInfo = document.createElement('div');
+    const marketName = document.createElement('strong');
+    marketName.textContent = `Market ${order.market_id}`;
+    const orderId = document.createElement('small');
+    orderId.textContent = `订单 ${order.order_id}`;
+    marketInfo.append(marketName, orderId);
+    market.append(token, marketInfo);
+    marketCell.append(market);
+
+    const sideCell = document.createElement('td');
+    const side = document.createElement('span');
+    side.className = `side-badge ${order.side === 'sell' ? 'sell' : ''}`;
+    side.textContent = `${String(order.side || '').toUpperCase()} ${order.outcome || ''}`.trim();
+    sideCell.append(side);
+    const price = document.createElement('td');
+    price.className = 'order-price';
+    price.textContent = order.price;
+    const size = document.createElement('td');
+    size.textContent = order.size;
+    const state = document.createElement('td');
+    const badge = document.createElement('span');
+    badge.className = 'status-badge';
+    badge.textContent = order.is_emergency_exit ? '紧急卖出' : '开放';
+    state.append(badge);
+    row.append(marketCell, sideCell, price, size, state);
     list.append(row);
   });
 }
@@ -300,10 +347,26 @@ async function refreshStatus() {
     const mode = status.dry_run ? '模拟运行' : '实盘模式';
     const badge = document.querySelector('#mode-badge');
     badge.textContent = mode;
-    badge.className = `badge ${status.dry_run ? 'safe' : 'live'}`;
-    document.querySelector('#run-status').textContent = status.running ? '运行中' : (status.configured ? '已停止' : '等待配置');
+    badge.className = `pill ${status.dry_run ? '' : 'live'}`;
+    const runStatus = document.querySelector('#run-status');
+    runStatus.textContent = status.running ? '运行中' : (status.configured ? '已停止' : '等待配置');
+    runStatus.className = `metric-value ${status.running ? 'positive' : 'warning'}`;
+    document.querySelector('#run-status-note').textContent = status.running
+      ? '机器人正在管理订单'
+      : (status.configured ? '配置已加载，可以启动' : '请先保存账户和挂单设置');
     const markets = status.markets || [];
     document.querySelector('#market-value').textContent = markets.length ? `${markets.length} 个市场` : '—';
+    document.querySelector('#market-count').textContent = markets.length;
+    document.querySelector('#configured-market-summary').textContent = markets.length
+      ? `已配置 ${markets.length} 个市场`
+      : '尚未配置市场';
+    document.querySelector('#configured-note').textContent = markets.length
+      ? (status.dry_run ? '当前为模拟运行' : '当前为实盘模式')
+      : '等待加载配置';
+    document.querySelector('#risk-total').textContent = status.max_total_position;
+    document.querySelector('#risk-market').textContent = status.max_position_per_market;
+    document.querySelector('#risk-emergency').textContent = status.emergency_exit_on_buy_fill ? '已启用' : '未启用';
+    document.querySelector('#risk-emergency').className = status.emergency_exit_on_buy_fill ? 'positive' : 'warning';
     renderOpenOrders(status.open_orders || []);
     document.querySelector('#start-button').disabled = !status.configured || status.running;
     document.querySelector('#stop-button').disabled = !status.running;
@@ -327,6 +390,13 @@ async function refreshStatus() {
       status.jwt_token_set && 'JWT 已保存',
       status.private_key_set && '私钥已保存',
     ].filter(Boolean).join(' · ') || '尚未保存实盘密钥';
+    const accountReady = status.api_key_set && status.private_key_set;
+    const accountBadge = document.querySelector('#account-badge');
+    accountBadge.textContent = accountReady ? '账户已连接' : '账户配置不完整';
+    accountBadge.className = `pill ${accountReady ? '' : 'live'}`;
+    document.querySelector('#sidebar-account').textContent = status.account_address
+      ? `${status.account_address.slice(0, 8)}…${status.account_address.slice(-4)}`
+      : (accountReady ? 'EOA 账户已连接' : '账户尚未配置');
     if (status.last_error) showNotice(`机器人停止：${status.last_error}`, 'error');
   } catch (error) {
     showNotice(error.message, 'error');
@@ -339,6 +409,9 @@ async function refreshLogs() {
     const logs = document.querySelector('#logs');
     logs.textContent = lines.length ? lines.join('\n') : '暂无运行日志。';
     logs.scrollTop = logs.scrollHeight;
+    const preview = document.querySelector('#dashboard-logs');
+    preview.textContent = lines.length ? lines.slice(-6).join('\n') : '暂无运行日志。';
+    preview.scrollTop = preview.scrollHeight;
   } catch (error) {
     showNotice(error.message, 'error');
   }

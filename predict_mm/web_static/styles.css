@@ -46,6 +46,10 @@ button { cursor: pointer; }
 
 .main { min-width: 0; background: radial-gradient(circle at 88% -10%, rgba(38, 83, 111, .38), transparent 34%), var(--bg); }
 .content { width: min(1320px, 100%); margin: auto; padding: 30px 34px 48px; }
+.utility-bar { display: flex; justify-content: flex-end; margin-bottom: 14px; }
+.x-profile-link { display: inline-flex; align-items: center; gap: 9px; min-height: 38px; padding: 0 13px; border: 1px solid var(--line); border-radius: 999px; background: rgba(17, 24, 39, .86); color: #dce5f5; font-size: 12px; font-weight: 750; text-decoration: none; transition: .16s ease; }
+.x-profile-link:hover { border-color: #4e607d; background: #172033; color: white; transform: translateY(-1px); }
+.x-mark { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: #f4f7ff; color: #080c13; font-size: 11px; font-weight: 900; }
 .view { display: none; }
 .view.active { display: block; }
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 22px; }

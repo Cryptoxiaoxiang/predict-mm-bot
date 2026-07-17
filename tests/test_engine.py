@@ -111,6 +111,54 @@ def test_cancelled_buy_fill_still_exits_once_per_settlement() -> None:
     assert client.created[0][0].price == Decimal("0.01")
 
 
+def test_wallet_fill_uses_order_restored_from_safety_journal() -> None:
+    class JournalClient(EmergencyClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.remembered: list[ManagedOrder] = []
+
+        def load_tracked_orders(self) -> list[ManagedOrder]:
+            return [
+                ManagedOrder(
+                    order_id="restored-order",
+                    order_hash="restored-hash",
+                    quote=Quote(
+                        "market-1", Side.BUY, Decimal("0.40"), Decimal("2"), "No"
+                    ),
+                    created_at=0,
+                    status=OrderStatus.CANCELED,
+                )
+            ]
+
+        def persist_tracked_order(self, order: ManagedOrder) -> None:
+            self.remembered.append(order)
+
+    client = JournalClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+    engine._restore_tracked_orders()
+
+    asyncio.run(
+        handle_fill_and_wait(
+            engine,
+            WalletFillEvent(
+                order_id="missing-id",
+                order_hash="restored-hash",
+                filled_size=Decimal("2"),
+            ),
+        )
+    )
+
+    assert client.created[0][0].side == Side.SELL
+    assert client.created[0][0].outcome == "No"
+    assert client.created[0][0].price == Decimal("0.01")
+    assert client.remembered
+
+
 def test_active_orders_exposes_each_open_order() -> None:
     engine = MarketMakerEngine(
         config=BotConfig(markets=[MarketConfig(id="market-1")]),

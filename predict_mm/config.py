@@ -16,6 +16,7 @@ class Settings:
     predict_account_address: str | None = None
     chain_id: int = 56
     log_level: str = "INFO"
+    order_journal_path: str = ".predict-mm-orders.json"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -28,6 +29,9 @@ class Settings:
             predict_account_address=os.getenv("PREDICT_ACCOUNT_ADDRESS") or None,
             chain_id=int(os.getenv("PREDICT_CHAIN_ID", str(cls.chain_id))),
             log_level=os.getenv("LOG_LEVEL", cls.log_level),
+            order_journal_path=os.getenv(
+                "PREDICT_ORDER_JOURNAL_PATH", cls.order_journal_path
+            ),
         )
 
 

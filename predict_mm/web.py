@@ -180,8 +180,7 @@ class DashboardState:
             jwt_token_updated=self._persist_refreshed_jwt,
         )
         try:
-            for market in config.enabled_markets:
-                await client.cancel_all_orders(market.id)
+            await client.cancel_all_orders(None)
         finally:
             await client.close()
 

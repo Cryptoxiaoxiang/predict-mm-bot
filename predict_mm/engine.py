@@ -69,13 +69,16 @@ class MarketMakerEngine:
             [market.id for market in self.config.enabled_markets],
         )
 
-        if self.config.cancel_all_on_start:
-            await self._cancel_all_known_markets()
-
-        if not self.config.dry_run and self.config.emergency_exit_on_buy_fill:
-            self._wallet_task = asyncio.create_task(self._watch_wallet_fills())
-
+        self._restore_tracked_orders()
+        started = False
         try:
+            if self.config.cancel_all_on_start:
+                await self._cancel_all_known_markets()
+
+            if not self.config.dry_run and self.config.emergency_exit_on_buy_fill:
+                self._wallet_task = asyncio.create_task(self._watch_wallet_fills())
+
+            started = True
             next_quote_at = monotonic()
             while not self._stop.is_set():
                 if monotonic() >= next_quote_at:
@@ -91,7 +94,7 @@ class MarketMakerEngine:
                 task.cancel()
             if self._emergency_tasks:
                 await asyncio.gather(*self._emergency_tasks, return_exceptions=True)
-            if self.config.cancel_all_on_shutdown:
+            if started and self.config.cancel_all_on_shutdown:
                 await self._cancel_all_known_markets()
             await self.client.close()
             logger.info("Market maker stopped")
@@ -172,6 +175,7 @@ class MarketMakerEngine:
                     )
                     continue
                 self.open_orders[order.order_id] = order
+                self._remember_order(order)
 
     async def _cancel_orders_approached_by_market(self, market_id: str, orderbook: OrderBook) -> None:
         """Cancel quotes once the market touch is only one tick away from them."""
@@ -225,6 +229,7 @@ class MarketMakerEngine:
             )
             return False
         order.status = OrderStatus.CANCELED
+        self._remember_order(order)
         return True
 
     async def _reconcile_buy_fills(self) -> None:
@@ -272,7 +277,16 @@ class MarketMakerEngine:
                 (candidate for candidate in self.open_orders.values() if candidate.order_hash == event.order_hash),
                 None,
             )
-        if order is None or order.is_emergency_exit or order.quote.side != Side.BUY:
+        if order is None:
+            logger.critical(
+                "Received a wallet fill that is absent from memory and the safety journal: "
+                "order_id=%s order_hash=%s event=%s. The market requires manual review.",
+                event.order_id,
+                event.order_hash,
+                event.event_type,
+            )
+            return
+        if order.is_emergency_exit or order.quote.side != Side.BUY:
             return
 
         fill_size = event.filled_size
@@ -307,6 +321,7 @@ class MarketMakerEngine:
         if fill_size <= Decimal("0"):
             return
         order.filled_size += fill_size
+        self._remember_order(order)
         logger.critical(
             "Detected %s for buy order %s; starting emergency exit",
             event.event_type,
@@ -386,6 +401,7 @@ class MarketMakerEngine:
 
             exit_order.is_emergency_exit = True
             self.open_orders[exit_order.order_id] = exit_order
+            self._remember_order(exit_order)
             logger.critical(
                 "Emergency 0.01 sell order submitted for market %s: %s",
                 market_id,
@@ -394,7 +410,28 @@ class MarketMakerEngine:
             return
 
     async def _cancel_all_known_markets(self) -> None:
-        for market in self.config.enabled_markets:
-            await self.client.cancel_all_orders(market.id)
+        # Predict's remove endpoint only hides orders from the public book. Use
+        # one account-wide removal so stale orders from deleted market configs
+        # cannot remain visible. New signatures also expire after 120 seconds.
+        await self.client.cancel_all_orders(None)
         for order in self.open_orders.values():
             order.status = OrderStatus.CANCELED
+            self._remember_order(order)
+
+    def _restore_tracked_orders(self) -> None:
+        loader = getattr(self.client, "load_tracked_orders", None)
+        if loader is None:
+            return
+        restored = loader()
+        for order in restored:
+            self.open_orders[order.order_id] = order
+        if restored:
+            logger.warning(
+                "Restored %s bot-created orders from the local safety journal",
+                len(restored),
+            )
+
+    def _remember_order(self, order: ManagedOrder) -> None:
+        persist = getattr(self.client, "persist_tracked_order", None)
+        if persist is not None:
+            persist(order)

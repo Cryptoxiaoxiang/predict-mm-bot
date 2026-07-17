@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch
 
 from predict_mm.client import PredictAuthorizationError, PredictClient
 from predict_mm.config import Settings
-from predict_mm.models import Quote, Side
+from predict_mm.models import ManagedOrder, OrderStatus, Quote, Side
 
 
 def test_headers_match_predict_docs() -> None:
@@ -600,3 +600,81 @@ def test_get_order_filled_amounts_maps_id_and_hash() -> None:
         "order-1": Decimal("2.5"),
         "hash-1": Decimal("2.5"),
     }
+
+
+def test_get_order_filled_amounts_follows_every_cursor_page() -> None:
+    class StubClient(PredictClient):
+        def __init__(self) -> None:
+            super().__init__(
+                Settings(api_key="api-key", jwt_token="jwt"), dry_run=False
+            )
+            self.queries: list[dict[str, object]] = []
+
+        async def _request(self, method, path, payload=None, query=None):  # type: ignore[no-untyped-def]
+            self.queries.append(dict(query or {}))
+            if query and query.get("after") == "next-page":
+                return {
+                    "data": [
+                        {
+                            "id": "order-2",
+                            "orderHash": "hash-2",
+                            "amountFilled": "2000000000000000000",
+                        }
+                    ]
+                }
+            return {
+                "data": [
+                    {
+                        "id": "order-1",
+                        "orderHash": "hash-1",
+                        "amountFilled": "1000000000000000000",
+                    }
+                ],
+                "cursor": "next-page",
+            }
+
+    client = StubClient()
+    fills = asyncio.run(client.get_order_filled_amounts())
+
+    assert fills["order-1"] == Decimal("1")
+    assert fills["order-2"] == Decimal("2")
+    assert client.queries == [
+        {"first": 100},
+        {"first": 100, "after": "next-page"},
+    ]
+
+
+def test_order_safety_journal_restores_removed_buy_order(tmp_path) -> None:
+    journal = tmp_path / "orders.json"
+    client = PredictClient(
+        Settings(order_journal_path=str(journal)), dry_run=False
+    )
+    order = ManagedOrder(
+        order_id="late-fill-order",
+        order_hash="0xhash",
+        quote=Quote(
+            market_id="market-1",
+            side=Side.BUY,
+            price=Decimal("0.42"),
+            size=Decimal("3"),
+            outcome="No",
+            token_id="123",
+            fee_rate_bps=0,
+            is_neg_risk=False,
+            is_yield_bearing=True,
+        ),
+        created_at=0,
+        status=OrderStatus.CANCELED,
+        filled_size=Decimal("1"),
+    )
+
+    client.persist_tracked_order(order)
+    restored = client.load_tracked_orders()
+
+    assert len(restored) == 1
+    assert restored[0].order_id == "late-fill-order"
+    assert restored[0].order_hash == "0xhash"
+    assert restored[0].status == OrderStatus.CANCELED
+    assert restored[0].filled_size == Decimal("1")
+    assert restored[0].quote.outcome == "No"
+    assert journal.stat().st_mode & 0o777 == 0o600

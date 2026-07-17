@@ -9,7 +9,9 @@ import logging
 import os
 import re
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 from time import monotonic
 from uuid import uuid4
 
@@ -45,6 +47,7 @@ class PredictClient:
         self._jwt_refresh_lock = asyncio.Lock()
         self._dry_orders: dict[str, ManagedOrder] = {}
         self._market_metadata: dict[str, dict] = {}
+        self._order_journal_path = Path(settings.order_journal_path)
 
     async def close(self) -> None:
         return None
@@ -241,9 +244,8 @@ class PredictClient:
 
         self._require_api_key()
         self._require_jwt()
-        response = await self._request("GET", "/v1/orders", query={"first": 100})
         filled_amounts: dict[str, Decimal] = {}
-        for row in self._rows(response):
+        for row in await self._all_order_rows():
             raw_amount = row.get("amountFilled") or row.get("amount_filled") or "0"
             amount = Decimal(str(raw_amount)) / Decimal(10**18)
             order = row.get("order") if isinstance(row.get("order"), dict) else {}
@@ -291,12 +293,34 @@ class PredictClient:
             or data.get("orderHash")
             or data.get("order_hash")
         )
-        return ManagedOrder(
+        signed_order = signed_order_payload["data"]["order"]
+        managed_order = ManagedOrder(
             order_id=order_id,
             quote=quote,
             created_at=monotonic(),
-            order_hash=str(data.get("orderHash") or data.get("order_hash") or "") or None,
+            order_hash=str(
+                data.get("orderHash")
+                or data.get("order_hash")
+                or signed_order.get("hash")
+                or ""
+            )
+            or None,
         )
+        self.persist_tracked_order(managed_order)
+        display_side, display_outcome = self._display_order_intent(
+            quote, post_only=post_only
+        )
+        logger.info(
+            "Create%s %s %s %s @ %s on %s (order %s)",
+            " emergency" if not post_only else "",
+            display_side,
+            quote.size,
+            display_outcome,
+            quote.price,
+            quote.market_id,
+            managed_order.order_id,
+        )
+        return managed_order
 
     async def stream_wallet_fill_events(self):
         """Yield confirmed wallet fills from Predict's account WebSocket."""
@@ -390,13 +414,122 @@ class PredictClient:
         query: dict[str, object] = {"first": 100, "status": "OPEN"}
         if market_id is not None:
             query["marketId"] = market_id
-        response = await self._request("GET", "/v1/orders", query=query)
         ids: list[str] = []
-        for row in self._rows(response):
+        for row in await self._all_order_rows(query):
             order_id = row.get("id") or row.get("orderId") or row.get("order_id")
             if order_id:
                 ids.append(str(order_id))
         return ids
+
+    async def _all_order_rows(
+        self, query: dict[str, object] | None = None
+    ) -> list[dict]:
+        """Read every orders page so fills and stale orders cannot hide after row 100."""
+        page_query = {"first": 100, **(query or {})}
+        rows: list[dict] = []
+        seen_cursors: set[str] = set()
+        while True:
+            response = await self._request("GET", "/v1/orders", query=page_query)
+            rows.extend(self._rows(response))
+            cursor = self._response_cursor(response)
+            if not cursor or cursor in seen_cursors:
+                return rows
+            seen_cursors.add(cursor)
+            page_query["after"] = cursor
+
+    @staticmethod
+    def _response_cursor(response: dict) -> str | None:
+        containers = [response]
+        data = response.get("data")
+        if isinstance(data, dict):
+            containers.append(data)
+        for container in containers:
+            cursor = container.get("cursor")
+            if cursor not in (None, ""):
+                return str(cursor)
+        return None
+
+    def load_tracked_orders(self) -> list[ManagedOrder]:
+        """Restore bot-created orders, including orders removed from the public book."""
+        if self.dry_run or not self._order_journal_path.exists():
+            return []
+        try:
+            raw = json.loads(self._order_journal_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            logger.error("Unable to read the local order safety journal: %s", error)
+            return []
+        records = raw.get("orders", []) if isinstance(raw, dict) else []
+        restored: list[ManagedOrder] = []
+        for record in records:
+            try:
+                quote_data = record["quote"]
+                restored.append(
+                    ManagedOrder(
+                        order_id=str(record["order_id"]),
+                        order_hash=record.get("order_hash") or None,
+                        quote=Quote(
+                            market_id=str(quote_data["market_id"]),
+                            side=Side(str(quote_data["side"])),
+                            price=Decimal(str(quote_data["price"])),
+                            size=Decimal(str(quote_data["size"])),
+                            outcome=str(quote_data.get("outcome") or "YES"),
+                            token_id=quote_data.get("token_id") or None,
+                            fee_rate_bps=quote_data.get("fee_rate_bps"),
+                            is_neg_risk=quote_data.get("is_neg_risk"),
+                            is_yield_bearing=quote_data.get("is_yield_bearing"),
+                        ),
+                        created_at=monotonic(),
+                        status=OrderStatus(str(record.get("status") or "unknown")),
+                        filled_size=Decimal(str(record.get("filled_size") or "0")),
+                        is_emergency_exit=bool(record.get("is_emergency_exit", False)),
+                    )
+                )
+            except (KeyError, TypeError, ValueError) as error:
+                logger.warning("Ignoring a malformed order journal record: %s", error)
+        return restored
+
+    def persist_tracked_order(self, order: ManagedOrder) -> None:
+        """Atomically retain enough metadata to react to a late fill after restart."""
+        if self.dry_run:
+            return
+        existing: dict[str, dict] = {}
+        if self._order_journal_path.exists():
+            try:
+                raw = json.loads(self._order_journal_path.read_text(encoding="utf-8"))
+                for record in raw.get("orders", []):
+                    if isinstance(record, dict) and record.get("order_id"):
+                        existing[str(record["order_id"])] = record
+            except (OSError, ValueError):
+                existing = {}
+        existing[order.order_id] = {
+            "order_id": order.order_id,
+            "order_hash": order.order_hash,
+            "status": order.status.value,
+            "filled_size": str(order.filled_size),
+            "is_emergency_exit": order.is_emergency_exit,
+            "quote": {
+                "market_id": order.quote.market_id,
+                "side": order.quote.side.value,
+                "price": str(order.quote.price),
+                "size": str(order.quote.size),
+                "outcome": order.quote.outcome,
+                "token_id": order.quote.token_id,
+                "fee_rate_bps": order.quote.fee_rate_bps,
+                "is_neg_risk": order.quote.is_neg_risk,
+                "is_yield_bearing": order.quote.is_yield_bearing,
+            },
+        }
+        records = list(existing.values())[-500:]
+        self._order_journal_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self._order_journal_path.with_suffix(
+            self._order_journal_path.suffix + ".tmp"
+        )
+        temporary.write_text(
+            json.dumps({"version": 1, "orders": records}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temporary.chmod(0o600)
+        temporary.replace(self._order_journal_path)
 
     async def _complete_quote_with_market_metadata(self, quote: Quote) -> Quote:
         if (
@@ -735,6 +868,10 @@ class PredictClient:
                 maker_amount=str(amounts.maker_amount),
                 taker_amount=str(amounts.taker_amount),
                 fee_rate_bps=int(quote.fee_rate_bps or 0),
+                # Removing an order from Predict's public orderbook does not
+                # invalidate its signature on-chain. A short hard expiry bounds
+                # that residual risk even if the process or network disappears.
+                expires_at=datetime.now(timezone.utc) + timedelta(seconds=120),
             ),
         )
         typed_data = builder.build_typed_data(

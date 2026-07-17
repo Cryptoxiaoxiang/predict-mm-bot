@@ -18,7 +18,16 @@ from uuid import uuid4
 import requests
 
 from predict_mm.config import Settings
-from predict_mm.models import Level, ManagedOrder, OrderBook, OrderStatus, Quote, Side, WalletFillEvent
+from predict_mm.models import (
+    Level,
+    ManagedOrder,
+    OrderBook,
+    OrderStatus,
+    Quote,
+    Side,
+    WalletFillEvent,
+    WalletOrderStatusEvent,
+)
 
 logger = logging.getLogger("predict-mm")
 
@@ -298,6 +307,9 @@ class PredictClient:
             order_id=order_id,
             quote=quote,
             created_at=monotonic(),
+            # POST /v1/orders only confirms submission. Predict's wallet stream
+            # or GET /v1/orders must confirm that matching accepted it.
+            status=OrderStatus.PENDING,
             order_hash=str(
                 data.get("orderHash")
                 or data.get("order_hash")
@@ -311,7 +323,7 @@ class PredictClient:
             quote, post_only=post_only
         )
         logger.info(
-            "Create%s %s %s %s @ %s on %s (order %s)",
+            "Submit%s %s %s %s @ %s on %s (order %s; awaiting Predict.fun OPEN confirmation)",
             " emergency" if not post_only else "",
             display_side,
             quote.size,
@@ -380,7 +392,7 @@ class PredictClient:
                     continue
 
                 payload = self._wallet_event_payload(message)
-                event = self._wallet_fill_event(payload) if payload is not None else None
+                event = self._wallet_event(payload) if payload is not None else None
                 if event is not None:
                     yield event
 
@@ -420,6 +432,10 @@ class PredictClient:
             if order_id:
                 ids.append(str(order_id))
         return ids
+
+    async def get_open_order_ids(self, market_id: str | None = None) -> set[str]:
+        """Return order IDs that Predict currently reports as OPEN."""
+        return set(await self._get_open_order_ids(market_id))
 
     async def _all_order_rows(
         self, query: dict[str, object] | None = None
@@ -913,6 +929,30 @@ class PredictClient:
             filled_size=Decimal(str(size_wei)) / Decimal(10**18),
             settlement_id=str(message.get("settlementId") or "") or None,
             event_type=event_type,
+        )
+
+    def _wallet_event(
+        self, message: dict
+    ) -> WalletFillEvent | WalletOrderStatusEvent | None:
+        fill_event = self._wallet_fill_event(message)
+        if fill_event is not None:
+            return fill_event
+        event_type = str(message.get("type") or "")
+        if event_type not in {
+            "orderAccepted",
+            "orderNotAccepted",
+            "orderExpired",
+            "orderCancelled",
+        }:
+            return None
+        order_id = message.get("orderId")
+        if order_id in (None, ""):
+            return None
+        return WalletOrderStatusEvent(
+            order_id=str(order_id),
+            order_hash=str(message.get("orderHash") or "") or None,
+            event_type=event_type,
+            reason=str(message.get("reason") or "") or None,
         )
 
     @staticmethod

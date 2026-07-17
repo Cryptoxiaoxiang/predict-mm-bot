@@ -513,6 +513,25 @@ def test_wallet_fill_event_unwraps_official_websocket_message_envelope() -> None
     assert event.filled_size == Decimal("3")
 
 
+def test_wallet_event_parses_order_rejection_reason() -> None:
+    client = PredictClient(Settings(), dry_run=True)
+
+    event = client._wallet_event(
+        {
+            "type": "orderNotAccepted",
+            "orderId": "order-1",
+            "orderHash": "hash-1",
+            "reason": "rejectedPostOnly",
+        }
+    )
+
+    assert event is not None
+    assert event.order_id == "order-1"
+    assert event.order_hash == "hash-1"
+    assert event.event_type == "orderNotAccepted"
+    assert event.reason == "rejectedPostOnly"
+
+
 def test_wallet_stream_answers_official_heartbeat_and_yields_enveloped_fill() -> None:
     class FakeWebSocket:
         def __init__(self) -> None:

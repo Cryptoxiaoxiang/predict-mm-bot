@@ -9,7 +9,14 @@ from time import monotonic
 
 from predict_mm.client import PredictClient
 from predict_mm.config import BotConfig
-from predict_mm.models import ManagedOrder, OrderBook, OrderStatus, Side, WalletFillEvent
+from predict_mm.models import (
+    ManagedOrder,
+    OrderBook,
+    OrderStatus,
+    Side,
+    WalletFillEvent,
+    WalletOrderStatusEvent,
+)
 from predict_mm.risk import RiskManager
 from predict_mm.strategy import PassiveMakerStrategy
 
@@ -30,13 +37,16 @@ class MarketMakerEngine:
         self.risk = risk
         self.open_orders: dict[str, ManagedOrder] = {}
         self._stop = asyncio.Event()
-        self._fill_events: asyncio.Queue[WalletFillEvent] = asyncio.Queue()
+        self._fill_events: asyncio.Queue[WalletFillEvent | WalletOrderStatusEvent] = asyncio.Queue()
         self._wallet_task: asyncio.Task[None] | None = None
         self._emergency_tasks: set[asyncio.Task[None]] = set()
         self._halted_markets: set[str] = set()
         self._submitted_fill_settlements: set[str] = set()
         self._handled_fill_settlements: set[str] = set()
         self._emergency_retry_base_seconds = 0.5
+        self._order_acceptance_timeout_seconds = max(
+            5.0, self.config.poll_interval_seconds * 2
+        )
 
     def request_stop(self) -> None:
         self._stop.set()
@@ -75,7 +85,7 @@ class MarketMakerEngine:
             if self.config.cancel_all_on_start:
                 await self._cancel_all_known_markets()
 
-            if not self.config.dry_run and self.config.emergency_exit_on_buy_fill:
+            if not self.config.dry_run:
                 self._wallet_task = asyncio.create_task(self._watch_wallet_fills())
 
             started = True
@@ -122,9 +132,13 @@ class MarketMakerEngine:
                 event = await asyncio.wait_for(self._fill_events.get(), timeout=timeout)
             except asyncio.TimeoutError:
                 continue
-            await self._handle_wallet_fill(event)
+            if isinstance(event, WalletOrderStatusEvent):
+                self._handle_wallet_order_status(event)
+            else:
+                await self._handle_wallet_fill(event)
 
     async def _tick(self) -> None:
+        await self._reconcile_order_statuses()
         await self._reconcile_buy_fills()
         await self._cancel_stale_orders()
         positions = await self.client.get_positions()
@@ -140,7 +154,7 @@ class MarketMakerEngine:
                 logger.info("No safe quote for %s", market.id)
                 continue
 
-            active = [order for order in self.open_orders.values() if order.status == OrderStatus.OPEN]
+            active = self._working_orders()
             missing_quotes = [
                 quote
                 for quote in quotes
@@ -176,13 +190,110 @@ class MarketMakerEngine:
                     continue
                 self.open_orders[order.order_id] = order
                 self._remember_order(order)
+        await self._reconcile_order_statuses()
+
+    def _working_orders(self) -> list[ManagedOrder]:
+        return [
+            order
+            for order in self.open_orders.values()
+            if order.status in {OrderStatus.PENDING, OrderStatus.OPEN}
+        ]
+
+    async def _reconcile_order_statuses(self) -> None:
+        """Treat Predict's OPEN orders response as the dashboard source of truth."""
+        if self.config.dry_run:
+            return
+        candidates = self._working_orders()
+        if not candidates:
+            return
+        try:
+            official_open_ids = await self.client.get_open_order_ids()
+        except Exception as error:  # noqa: BLE001
+            logger.warning("Unable to confirm OPEN orders from Predict.fun: %s", error)
+            return
+
+        for order in candidates:
+            if order.order_id in official_open_ids:
+                if order.status == OrderStatus.PENDING:
+                    order.status = OrderStatus.OPEN
+                    self._remember_order(order)
+                    logger.info(
+                        "Order accepted and OPEN on Predict.fun: %s (%s %s %s @ %s on %s)",
+                        order.order_id,
+                        order.quote.side.value,
+                        order.quote.size,
+                        order.quote.outcome,
+                        order.quote.price,
+                        order.quote.market_id,
+                    )
+                continue
+
+            if (
+                order.status == OrderStatus.OPEN
+                and order.age_seconds < self._order_acceptance_timeout_seconds
+            ):
+                # The wallet stream can confirm acceptance before the REST list
+                # catches up. Give that authoritative event a short grace period.
+                continue
+            if order.status == OrderStatus.OPEN:
+                order.status = OrderStatus.CANCELED
+                self._remember_order(order)
+                logger.warning(
+                    "Order %s is no longer OPEN according to Predict.fun; removed from dashboard",
+                    order.order_id,
+                )
+            elif order.age_seconds >= self._order_acceptance_timeout_seconds:
+                logger.warning(
+                    "Order submission %s was not confirmed OPEN by Predict.fun within %.1f seconds; "
+                    "removing it defensively and keeping it off the dashboard",
+                    order.order_id,
+                    self._order_acceptance_timeout_seconds,
+                )
+                await self._cancel_order_safely(order)
+
+    def _handle_wallet_order_status(self, event: WalletOrderStatusEvent) -> None:
+        order = self.open_orders.get(event.order_id)
+        if order is None and event.order_hash:
+            order = next(
+                (
+                    candidate
+                    for candidate in self.open_orders.values()
+                    if candidate.order_hash == event.order_hash
+                ),
+                None,
+            )
+        if order is None:
+            logger.warning(
+                "Predict.fun wallet event %s for unknown order %s%s",
+                event.event_type,
+                event.order_id,
+                f" ({event.reason})" if event.reason else "",
+            )
+            return
+
+        if event.event_type == "orderAccepted":
+            order.status = OrderStatus.OPEN
+            logger.info("Predict.fun accepted order %s into the orderbook", order.order_id)
+        else:
+            order.status = OrderStatus.CANCELED
+            logger.warning(
+                "Predict.fun %s order %s%s",
+                {
+                    "orderNotAccepted": "rejected",
+                    "orderExpired": "expired",
+                    "orderCancelled": "cancelled",
+                }.get(event.event_type, event.event_type),
+                order.order_id,
+                f": {event.reason}" if event.reason else "",
+            )
+        self._remember_order(order)
 
     async def _cancel_orders_approached_by_market(self, market_id: str, orderbook: OrderBook) -> None:
         """Cancel quotes once the market touch is only one tick away from them."""
         tick_size = orderbook.tick_size or self.config.strategy.tick_size
         for order in list(self.open_orders.values()):
             if (
-                order.status != OrderStatus.OPEN
+                order.status not in {OrderStatus.PENDING, OrderStatus.OPEN}
                 or order.is_emergency_exit
                 or order.quote.market_id != market_id
             ):
@@ -211,7 +322,7 @@ class MarketMakerEngine:
 
     async def _cancel_stale_orders(self) -> None:
         for order in list(self.open_orders.values()):
-            if order.status != OrderStatus.OPEN or order.is_emergency_exit:
+            if order.status not in {OrderStatus.PENDING, OrderStatus.OPEN} or order.is_emergency_exit:
                 continue
             if order.age_seconds < self.config.cancel_after_seconds:
                 continue
@@ -344,7 +455,10 @@ class MarketMakerEngine:
             )
             return
         for order in self.open_orders.values():
-            if order.quote.market_id == market_id and order.status == OrderStatus.OPEN:
+            if order.quote.market_id == market_id and order.status in {
+                OrderStatus.PENDING,
+                OrderStatus.OPEN,
+            }:
                 order.status = OrderStatus.CANCELED
 
     async def _emergency_exit(self, filled_order: ManagedOrder, fill_size: Decimal) -> None:

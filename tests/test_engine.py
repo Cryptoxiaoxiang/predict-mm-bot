@@ -12,6 +12,7 @@ from predict_mm.models import (
     Quote,
     Side,
     WalletFillEvent,
+    WalletOrderStatusEvent,
 )
 from predict_mm.risk import RiskManager
 from predict_mm.strategy import PassiveMakerStrategy
@@ -197,6 +198,120 @@ def test_active_orders_exposes_each_open_order() -> None:
             "is_emergency_exit": False,
         },
     ]
+
+
+def test_dashboard_hides_submission_until_predict_confirms_open() -> None:
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        client=EmergencyClient(),  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+    engine.open_orders["pending"] = ManagedOrder(
+        order_id="pending",
+        quote=Quote("market-1", Side.BUY, Decimal("0.50"), Decimal("1")),
+        created_at=monotonic(),
+        status=OrderStatus.PENDING,
+    )
+
+    assert engine.active_orders() == []
+
+
+def test_rest_confirmation_promotes_pending_order_to_open() -> None:
+    class StatusClient(EmergencyClient):
+        async def get_open_order_ids(self) -> set[str]:
+            return {"pending"}
+
+        def persist_tracked_order(self, order: ManagedOrder) -> None:
+            return None
+
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        client=StatusClient(),  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+    order = ManagedOrder(
+        order_id="pending",
+        quote=Quote("market-1", Side.BUY, Decimal("0.50"), Decimal("1")),
+        created_at=monotonic(),
+        status=OrderStatus.PENDING,
+    )
+    engine.open_orders[order.order_id] = order
+
+    asyncio.run(engine._reconcile_order_statuses())
+
+    assert order.status == OrderStatus.OPEN
+    assert engine.active_orders()[0]["order_id"] == "pending"
+
+
+def test_unconfirmed_submission_is_removed_after_grace_period() -> None:
+    class StatusClient(EmergencyClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cancelled: list[str] = []
+
+        async def get_open_order_ids(self) -> set[str]:
+            return set()
+
+        async def cancel_order(self, order_id: str) -> None:
+            self.cancelled.append(order_id)
+
+        def persist_tracked_order(self, order: ManagedOrder) -> None:
+            return None
+
+    client = StatusClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+    order = ManagedOrder(
+        order_id="pending",
+        quote=Quote("market-1", Side.BUY, Decimal("0.50"), Decimal("1")),
+        created_at=monotonic() - 10,
+        status=OrderStatus.PENDING,
+    )
+    engine.open_orders[order.order_id] = order
+
+    asyncio.run(engine._reconcile_order_statuses())
+
+    assert client.cancelled == ["pending"]
+    assert order.status == OrderStatus.CANCELED
+
+
+def test_wallet_rejection_removes_pending_order_from_working_set(caplog) -> None:
+    class StatusClient(EmergencyClient):
+        def persist_tracked_order(self, order: ManagedOrder) -> None:
+            return None
+
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        client=StatusClient(),  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+    order = ManagedOrder(
+        order_id="pending",
+        quote=Quote("market-1", Side.BUY, Decimal("0.50"), Decimal("1")),
+        created_at=monotonic(),
+        status=OrderStatus.PENDING,
+    )
+    engine.open_orders[order.order_id] = order
+
+    with caplog.at_level("WARNING", logger="predict-mm"):
+        engine._handle_wallet_order_status(
+            WalletOrderStatusEvent(
+                order_id="pending",
+                event_type="orderNotAccepted",
+                reason="rejectedPostOnly",
+            )
+        )
+
+    assert order.status == OrderStatus.CANCELED
+    assert engine._working_orders() == []
+    assert "rejectedPostOnly" in caplog.text
 
 
 class RepriceClient:

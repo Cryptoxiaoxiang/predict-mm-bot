@@ -12,6 +12,7 @@ class Side(StrEnum):
 
 
 class OrderStatus(StrEnum):
+    PENDING = "pending"
     OPEN = "open"
     FILLED = "filled"
     CANCELED = "canceled"
@@ -81,6 +82,14 @@ class WalletFillEvent:
     order_hash: str | None = None
     settlement_id: str | None = None
     event_type: str = "orderTransactionSuccess"
+
+
+@dataclass(frozen=True)
+class WalletOrderStatusEvent:
+    order_id: str
+    event_type: str
+    order_hash: str | None = None
+    reason: str | None = None
 
 
 def quantize_price(price: Decimal, tick_size: Decimal, side: Side) -> Decimal:

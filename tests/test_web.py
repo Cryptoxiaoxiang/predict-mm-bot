@@ -2,6 +2,7 @@ from predict_mm.web import (
     MarketPayload,
     SetupPayload,
     _market_lookup_result,
+    _market_locale_from_url,
     _market_slug_from_url,
     _markets_matching_slug,
     _search_query_from_slug,
@@ -19,6 +20,15 @@ def test_market_slug_is_extracted_from_localized_predict_url() -> None:
     assert _market_slug_from_url("https://predict.fun/zh-cn/market/fifwc-fra-esp-2026-07-14") == (
         "fifwc-fra-esp-2026-07-14"
     )
+
+
+def test_market_locale_is_extracted_from_localized_predict_url() -> None:
+    assert _market_locale_from_url(
+        "https://predict.fun/zh-cn/market/cxmt-ipo-closing-market-cap"
+    ) == "zh-cn"
+    assert _market_locale_from_url(
+        "https://predict.fun/market/cxmt-ipo-closing-market-cap"
+    ) == ""
 
 
 def test_market_slug_rejects_non_predict_url() -> None:
@@ -74,8 +84,32 @@ def test_market_lookup_exposes_all_outcomes_for_user_selection() -> None:
     assert result["category_title"] == "France vs. Spain"
 
 
+def test_market_lookup_keeps_order_outcomes_canonical_on_chinese_pages() -> None:
+    result = _market_lookup_result(
+        {
+            "id": 42,
+            "question": "市值是否低于 1 万亿元？",
+            "outcomes": [{"name": "是"}, {"name": "否"}],
+        }
+    )
+
+    assert result["outcomes"] == ["Yes", "No"]
+
+
 def test_setup_accepts_non_binary_market_outcome() -> None:
-    _validate_setup(SetupPayload(markets=[MarketPayload(market_id="42", outcome="FRA")]))
+    payload = SetupPayload(
+        markets=[
+            MarketPayload(
+                market_id="42",
+                market_title="France vs Spain · Match winner",
+                outcome="FRA",
+            )
+        ]
+    )
+
+    _validate_setup(payload)
+
+    assert payload.markets[0].market_title == "France vs Spain · Match winner"
 
 
 def test_setup_rejects_a_url_that_has_not_been_resolved() -> None:

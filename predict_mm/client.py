@@ -818,6 +818,15 @@ class PredictClient:
             self._market_metadata[market_id] = self._data(response)
         return self._market_metadata[market_id]
 
+    def cached_market_title(self, market_id: str) -> str:
+        """Return a user-facing title for market metadata already fetched by the engine."""
+        market = self._market_metadata.get(market_id) or {}
+        for key in ("question", "title", "name"):
+            value = str(market.get(key) or "").strip()
+            if value:
+                return value
+        return ""
+
     def _tick_size_from_market(self, market: dict, market_id: str) -> Decimal:
         raw_precision = self._first_present(market, "decimalPrecision", "decimal_precision")
         try:

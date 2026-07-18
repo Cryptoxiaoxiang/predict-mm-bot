@@ -162,7 +162,9 @@ def test_wallet_fill_uses_order_restored_from_safety_journal() -> None:
 
 def test_active_orders_exposes_each_open_order() -> None:
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        config=BotConfig(
+            markets=[MarketConfig(id="market-1", title="Will it happen?")]
+        ),
         client=EmergencyClient(),  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -182,6 +184,7 @@ def test_active_orders_exposes_each_open_order() -> None:
         {
             "order_id": "buy",
             "market_id": "market-1",
+            "market_title": "Will it happen?",
             "side": "buy",
             "outcome": "YES",
             "price": "0.50",
@@ -191,6 +194,7 @@ def test_active_orders_exposes_each_open_order() -> None:
         {
             "order_id": "sell",
             "market_id": "market-1",
+            "market_title": "Will it happen?",
             "side": "sell",
             "outcome": "YES",
             "price": "0.60",

@@ -85,7 +85,7 @@ function setOutcomeOptions(row, outcomes, selected = '') {
   select.replaceChildren(...values.map((value) => {
     const option = document.createElement('option');
     option.value = value;
-    option.textContent = value === 'YES_NO' ? 'Yes & No（双向）' : value;
+    option.textContent = selectedOutcomeLabel(value);
     return option;
   }));
   select.value = selectedValue && values.includes(selectedValue) ? selectedValue : values[0];
@@ -98,12 +98,52 @@ function renumberMarkets() {
   });
 }
 
+function selectedOutcomeLabel(value) {
+  const normalized = String(value || '').toUpperCase();
+  return normalized === 'YES_NO' ? 'Yes & No（双向）' : value;
+}
+
+function updateSelectedMarket(row) {
+  const summary = row.querySelector('[data-field="selected_market"]');
+  const title = row.dataset.marketTitle || '';
+  if (!title) {
+    summary.hidden = true;
+    summary.textContent = '';
+    return;
+  }
+  const outcome = row.querySelector('[data-field="outcome"]').value;
+  summary.textContent = `已选择：${title} · ${selectedOutcomeLabel(outcome)}`;
+  summary.hidden = false;
+}
+
+function marketDisplayName(market) {
+  const question = String(market.question || market.title || '').trim();
+  const category = String(market.category_title || '').trim();
+  if (category && question && !question.toLowerCase().includes(category.toLowerCase())) {
+    return `${category} · ${question}`;
+  }
+  return question || category;
+}
+
+function applyResolvedMarket(row, market, selectedOutcome) {
+  const title = marketDisplayName(market);
+  row.querySelector('[data-field="market_id"]').value = market.id;
+  row.querySelector('[data-field="market_reference"]').value = title;
+  row.dataset.marketTitle = title;
+  setOutcomeOptions(row, market.outcomes || ['YES', 'NO'], selectedOutcome);
+  updateSelectedMarket(row);
+}
+
 function addMarket(market = {}) {
   const row = marketTemplate.content.firstElementChild.cloneNode(true);
   const marketIdInput = row.querySelector('[data-field="market_id"]');
+  const marketReferenceInput = row.querySelector('[data-field="market_reference"]');
   marketIdInput.value = market.market_id || '';
+  row.dataset.marketTitle = market.market_title || '';
+  marketReferenceInput.value = market.market_title || market.market_id || '';
   setOutcomeOptions(row, market.outcomes || ['YES', 'NO'], market.outcome || 'YES');
   row.querySelector('[data-field="quote_size"]').value = market.quote_size || '1.0';
+  updateSelectedMarket(row);
   row.querySelector('.remove-market').addEventListener('click', () => {
     if (marketsList.children.length === 1) return;
     row.remove();
@@ -112,9 +152,16 @@ function addMarket(market = {}) {
   });
   const resolveButton = row.querySelector('.resolve-market');
   resolveButton.addEventListener('click', () => resolveMarketUrl(row));
-  marketIdInput.addEventListener('change', () => {
-    if (isPredictMarketUrl(marketIdInput.value.trim())) resolveMarketUrl(row);
+  marketReferenceInput.addEventListener('input', () => {
+    const value = marketReferenceInput.value.trim();
+    marketIdInput.value = /^\d+$/.test(value) ? value : '';
+    row.dataset.marketTitle = '';
+    updateSelectedMarket(row);
   });
+  marketReferenceInput.addEventListener('change', () => {
+    if (isPredictMarketUrl(marketReferenceInput.value.trim())) resolveMarketUrl(row);
+  });
+  row.querySelector('[data-field="outcome"]').addEventListener('change', () => updateSelectedMarket(row));
   marketsList.append(row);
   renumberMarkets();
 }
@@ -131,20 +178,20 @@ function renderMarketLookup(row, result) {
     group.className = 'market-match-group';
     const title = document.createElement('p');
     const category = market.category_title ? `${market.category_title} · ` : '';
-    title.textContent = `${category}${market.question} · ID ${market.id}${market.trading_status ? ` · ${market.trading_status}` : ''}`;
+    title.textContent = `${category}${market.question}${market.trading_status ? ` · ${market.trading_status}` : ''}`;
+    title.title = `Market ID：${market.id}`;
     group.append(title);
     const outcomes = market.outcomes?.length ? market.outcomes : ['YES', 'NO'];
     outcomes.forEach((outcome) => {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'market-match';
-      button.textContent = `选择「${outcome}」挂单`;
+      button.textContent = `选择「${selectedOutcomeLabel(outcome)}」挂单`;
       button.addEventListener('click', () => {
-        row.querySelector('[data-field="market_id"]').value = market.id;
-        setOutcomeOptions(row, outcomes, outcome);
+        applyResolvedMarket(row, market, outcome);
         container.hidden = true;
         formDirty = true;
-        showNotice(`已选择 ${market.question} · ${outcome}（Market ID：${market.id}）`);
+        showNotice(`已选择 ${marketDisplayName(market)} · ${selectedOutcomeLabel(outcome)}`);
       });
       group.append(button);
     });
@@ -156,11 +203,10 @@ function renderMarketLookup(row, result) {
       bothButton.className = 'market-match';
       bothButton.textContent = '选择「Yes & No」双向挂单';
       bothButton.addEventListener('click', () => {
-        row.querySelector('[data-field="market_id"]').value = market.id;
-        setOutcomeOptions(row, outcomes, 'YES_NO');
+        applyResolvedMarket(row, market, 'YES_NO');
         container.hidden = true;
         formDirty = true;
-        showNotice(`已选择 ${market.question} · Yes & No 双向挂单（Market ID：${market.id}）`);
+        showNotice(`已选择 ${marketDisplayName(market)} · ${selectedOutcomeLabel('YES_NO')}`);
       });
       group.append(bothButton);
     }
@@ -169,10 +215,10 @@ function renderMarketLookup(row, result) {
 }
 
 async function resolveMarketUrl(row) {
-  const input = row.querySelector('[data-field="market_id"]');
+  const input = row.querySelector('[data-field="market_reference"]');
   const value = input.value.trim();
   if (!isPredictMarketUrl(value)) {
-    showNotice('请先粘贴完整的 Predict.fun 市场网址。数字 Market ID 无需识别。', 'error');
+    showNotice('请先粘贴完整的 Predict.fun 市场网址。', 'error');
     return;
   }
   const button = row.querySelector('.resolve-market');
@@ -183,7 +229,7 @@ async function resolveMarketUrl(row) {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({market_url: value}),
     });
     if (result.market_id) {
-      input.value = result.market_id;
+      row.querySelector('[data-field="market_id"]').value = result.market_id;
       formDirty = true;
       showNotice(result.message);
     } else {
@@ -205,6 +251,7 @@ function renderMarkets(markets = []) {
 function collectMarkets() {
   return [...marketsList.querySelectorAll('.market-row')].map((row) => ({
     market_id: row.querySelector('[data-field="market_id"]').value.trim(),
+    market_title: row.dataset.marketTitle || '',
     outcome: row.querySelector('[data-field="outcome"]').value,
     quote_size: row.querySelector('[data-field="quote_size"]').value.trim(),
   }));
@@ -237,12 +284,13 @@ function renderOpenOrders(orders = []) {
     market.className = 'market-cell';
     const token = document.createElement('div');
     token.className = 'token';
-    token.textContent = order.outcome || '—';
+    token.textContent = selectedOutcomeLabel(order.outcome) || '—';
     const marketInfo = document.createElement('div');
     const marketName = document.createElement('strong');
-    marketName.textContent = `Market ${order.market_id}`;
+    marketName.textContent = order.market_title || '未命名市场';
+    marketName.title = `Market ID：${order.market_id}`;
     const orderId = document.createElement('small');
-    orderId.textContent = `订单 ${order.order_id}`;
+    orderId.textContent = `${selectedOutcomeLabel(order.outcome)} · 订单 ${order.order_id}`;
     marketInfo.append(marketName, orderId);
     market.append(token, marketInfo);
     marketCell.append(market);
@@ -250,7 +298,7 @@ function renderOpenOrders(orders = []) {
     const sideCell = document.createElement('td');
     const side = document.createElement('span');
     side.className = `side-badge ${order.side === 'sell' ? 'sell' : ''}`;
-    side.textContent = `${String(order.side || '').toUpperCase()} ${order.outcome || ''}`.trim();
+    side.textContent = `${String(order.side || '').toUpperCase()} ${selectedOutcomeLabel(order.outcome) || ''}`.trim();
     sideCell.append(side);
     const price = document.createElement('td');
     price.className = 'order-price';

@@ -140,6 +140,7 @@ th:first-child, td:first-child { padding-left: 0; }
 .market-id-input { display: flex; gap: 8px; }
 .market-id-input input { min-width: 0; }
 .market-id-input button { flex: 0 0 auto; white-space: nowrap; }
+.selected-market { margin-top: 8px; color: var(--mint); font-size: 12px; font-weight: 700; line-height: 1.45; }
 .market-lookup-result { margin-top: 8px; padding: 10px; border: 1px solid #425070; border-radius: 9px; background: #101827; }
 .market-lookup-result p { margin: 0 0 8px; color: var(--muted); font-size: 13px; }
 .market-match-group { margin-top: 12px; padding-top: 10px; border-top: 1px solid #27334d; }

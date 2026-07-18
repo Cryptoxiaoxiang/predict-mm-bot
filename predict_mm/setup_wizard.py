@@ -27,6 +27,7 @@ class WizardAnswers:
 @dataclass(frozen=True)
 class MarketAnswers:
     market_id: str
+    market_title: str = ""
     outcome: str = "YES"
     quote_size: str = "1.0"
     token_id: str = ""
@@ -92,6 +93,7 @@ def build_config_text(answers: WizardAnswers, markets: list[MarketAnswers] | Non
     markets_text = "\n".join(
         f'''[[markets]]
 id = "{_toml_escape(market.market_id)}"
+title = "{_toml_escape(market.market_title)}"
 enabled = true
 outcome = "{market.outcome}"
 quote_size = "{_toml_escape(market.quote_size)}"

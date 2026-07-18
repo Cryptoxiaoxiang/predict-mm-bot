@@ -51,6 +51,14 @@ class MarketMakerEngine:
     def request_stop(self) -> None:
         self._stop.set()
 
+    def market_title(self, market_id: str) -> str:
+        configured = next(
+            (market.title for market in self.config.markets if market.id == market_id and market.title),
+            None,
+        )
+        cached_title = getattr(self.client, "cached_market_title", None)
+        return configured or (cached_title(market_id) if cached_title else "")
+
     def active_orders(self) -> list[dict[str, object]]:
         orders: list[dict[str, object]] = []
         for order in self.open_orders.values():
@@ -60,6 +68,7 @@ class MarketMakerEngine:
                 {
                     "order_id": order.order_id,
                     "market_id": order.quote.market_id,
+                    "market_title": self.market_title(order.quote.market_id),
                     "side": order.quote.side.value,
                     "outcome": order.quote.outcome,
                     "price": str(order.quote.price),

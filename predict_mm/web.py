@@ -31,6 +31,7 @@ STATIC_DIR = BASE_DIR / "web_static"
 
 class MarketPayload(BaseModel):
     market_id: str = Field(min_length=1, max_length=200)
+    market_title: str = Field(default="", max_length=500)
     outcome: str = Field(default="YES", min_length=1, max_length=120)
     quote_size: str = "1.0"
 
@@ -75,6 +76,7 @@ class DashboardState:
         self.log_handler = MemoryLogHandler()
         self.logging_ready = False
         self.lock = asyncio.Lock()
+        self.market_titles: dict[str, str] = {}
 
     @property
     def running(self) -> bool:
@@ -95,6 +97,11 @@ class DashboardState:
             config = load_config(self.config_path)
         settings = Settings.from_env()
         markets = config.enabled_markets if config else []
+        if self.engine is not None:
+            for market in markets:
+                title = self.engine.market_title(market.id)
+                if title:
+                    self.market_titles[market.id] = title
         return {
             "configured": self.configured(),
             "running": self.running,
@@ -103,6 +110,7 @@ class DashboardState:
             "markets": [
                 {
                     "market_id": market.id,
+                    "market_title": market.title or self.market_titles.get(market.id, ""),
                     "outcome": market.outcome,
                     "quote_size": str(market.quote_size or config.strategy.quote_size),
                 }
@@ -400,6 +408,7 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
         market_answers = [
             MarketAnswers(
                 market_id=market.market_id.strip(),
+                market_title=market.market_title.strip(),
                 outcome=market.outcome,
                 quote_size=market.quote_size.strip(),
             )
@@ -490,9 +499,14 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
         settings = Settings.from_env()
         client = PredictClient(settings=settings, dry_run=False)
         api_search_failed = False
+        localized_page = bool(_market_locale_from_url(payload.market_url))
         try:
             markets: list[dict] = []
-            if settings.api_key:
+            if localized_page:
+                # The public localized page contains translated category titles,
+                # market titles and questions. The API search response is English.
+                markets = await client.markets_from_public_page(payload.market_url, slug)
+            elif settings.api_key:
                 try:
                     markets = _markets_matching_slug(await client.search_markets(slug), slug)
                     if not markets:
@@ -520,6 +534,9 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
             "market_id": None,
             "matches": matches,
             "message": (
+                "已从中文页面读取市场名称。请选择要挂单的市场和 Yes / No 选项。"
+                if matches and localized_page
+                else
                 "官方搜索接口不可用，已从公开页面读取市场。请选择要挂单的市场和选项；实盘前仍需确认 API Key 有效。"
                 if matches and api_search_failed
                 else "请选择要挂单的市场和选项。"
@@ -590,6 +607,19 @@ def _market_slug_from_url(value: str) -> str:
     return slug
 
 
+def _market_locale_from_url(value: str) -> str:
+    parsed = urlparse(value.strip())
+    parts = [unquote(part) for part in parsed.path.split("/") if part]
+    try:
+        market_position = parts.index("market")
+    except ValueError:
+        return ""
+    if market_position < 1:
+        return ""
+    locale = parts[market_position - 1].strip().lower()
+    return locale if re.fullmatch(r"[a-z]{2}-[a-z]{2}", locale) else ""
+
+
 def _is_predict_market_url(value: str) -> bool:
     try:
         _market_slug_from_url(value)
@@ -640,6 +670,7 @@ def _market_lookup_result(market: dict) -> dict[str, object]:
         if not isinstance(outcome, dict):
             continue
         name = str(outcome.get("name") or outcome.get("outcome") or outcome.get("title") or "").strip()
+        name = {"是": "Yes", "否": "No"}.get(name, name)
         if name and name not in outcomes:
             outcomes.append(name)
     return {

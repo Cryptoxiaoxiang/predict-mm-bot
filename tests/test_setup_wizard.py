@@ -36,13 +36,19 @@ def test_build_config_text_supports_multiple_markets() -> None:
     text = build_config_text(
         WizardAnswers(market_id="ignored", quote_size="2.0"),
         markets=[
-            MarketAnswers(market_id="market-yes", outcome="YES", quote_size="1.0"),
+            MarketAnswers(
+                market_id="market-yes",
+                market_title='Will "Yes" win?',
+                outcome="YES",
+                quote_size="1.0",
+            ),
             MarketAnswers(market_id="market-no", outcome="NO", quote_size="2.0"),
         ],
     )
 
     assert text.count("[[markets]]") == 2
     assert 'id = "market-yes"' in text
+    assert 'title = "Will \\"Yes\\" win?"' in text
     assert 'id = "market-no"' in text
     assert 'quote_size = "2.0"' in text
 

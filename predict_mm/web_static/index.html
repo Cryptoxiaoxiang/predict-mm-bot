@@ -110,7 +110,7 @@
       <article class="market-row">
         <div class="market-row-heading"><strong class="market-title">市场</strong><button class="text-button remove-market" type="button">移除</button></div>
         <div class="market-fields">
-          <label class="field market-id-field"><span class="label-with-help">市场网址 / Market ID <span class="tooltip" tabindex="0">?<span class="tooltip-text" role="tooltip">可直接粘贴 Predict.fun 市场网址，程序会自动获取 Market ID；也可以直接输入数字 ID。</span></span></span><div class="market-id-input"><input data-field="market_id" required placeholder="粘贴市场网址，或输入数字 ID" /><button class="btn secondary resolve-market" type="button">识别网址</button></div><div class="market-lookup-result" data-field="market_lookup" hidden></div></label>
+          <label class="field market-id-field"><span class="label-with-help">Predict.fun 市场网址 <span class="tooltip" tabindex="0">?<span class="tooltip-text" role="tooltip">粘贴完整的 Predict.fun 市场网址并点击“识别网址”。选择后，这里会显示市场名称；程序会在内部保存下单所需的 Market ID。</span></span></span><div class="market-id-input"><input data-field="market_reference" required placeholder="粘贴 Predict.fun 市场网址" /><input data-field="market_id" type="hidden" /><button class="btn secondary resolve-market" type="button">识别网址</button></div><div class="selected-market" data-field="selected_market" hidden></div><div class="market-lookup-result" data-field="market_lookup" hidden></div></label>
           <label class="field"><span>挂单选项</span><select data-field="outcome"><option>YES</option><option>NO</option><option value="YES_NO">Yes &amp; No（双向）</option></select></label>
           <label class="field"><span>单次挂单数量</span><input data-field="quote_size" inputmode="decimal" value="1.0" required /></label>
         </div>

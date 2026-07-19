@@ -108,8 +108,61 @@ def test_cancelled_buy_fill_still_exits_once_per_settlement() -> None:
 
     asyncio.run(exercise())
 
+    assert client.cancelled_markets == ["market-1"]
     assert len(client.created) == 1
     assert client.created[0][0].price == Decimal("0.01")
+
+
+def test_failed_submitted_cancel_is_retried_before_emergency_sell() -> None:
+    class RetryCancelClient(EmergencyClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cancel_attempts = 0
+
+        async def cancel_all_orders(self, market_id: str) -> None:
+            self.cancel_attempts += 1
+            if self.cancel_attempts == 1:
+                raise RuntimeError("temporary cancel failure")
+            await super().cancel_all_orders(market_id)
+
+    client = RetryCancelClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+    maker_order = ManagedOrder(
+        order_id="maker-order",
+        quote=Quote("market-1", Side.BUY, Decimal("0.50"), Decimal("3")),
+        created_at=0,
+    )
+    engine.open_orders[maker_order.order_id] = maker_order
+
+    async def exercise() -> None:
+        await engine._handle_wallet_fill(
+            WalletFillEvent(
+                order_id="maker-order",
+                filled_size=Decimal("2"),
+                settlement_id="settlement-1",
+                event_type="orderTransactionSubmitted",
+            )
+        )
+        await handle_fill_and_wait(
+            engine,
+            WalletFillEvent(
+                order_id="maker-order",
+                filled_size=Decimal("2"),
+                settlement_id="settlement-1",
+                event_type="orderTransactionSuccess",
+            ),
+        )
+
+    asyncio.run(exercise())
+
+    assert client.cancel_attempts == 2
+    assert client.cancelled_markets == ["market-1"]
+    assert len(client.created) == 1
 
 
 def test_wallet_fill_uses_order_restored_from_safety_journal() -> None:

@@ -41,8 +41,10 @@ class MarketMakerEngine:
         self._wallet_task: asyncio.Task[None] | None = None
         self._emergency_tasks: set[asyncio.Task[None]] = set()
         self._halted_markets: set[str] = set()
+        self._prepared_emergency_markets: set[str] = set()
         self._submitted_fill_settlements: set[str] = set()
         self._handled_fill_settlements: set[str] = set()
+        self._fill_reconcile_interval_seconds = 0.5
         self._emergency_retry_base_seconds = 0.5
         self._order_acceptance_timeout_seconds = max(
             5.0, self.config.poll_interval_seconds * 2
@@ -99,11 +101,19 @@ class MarketMakerEngine:
 
             started = True
             next_quote_at = monotonic()
+            next_fill_reconcile_at = monotonic()
             while not self._stop.is_set():
+                if monotonic() >= next_fill_reconcile_at:
+                    await self._reconcile_buy_fills()
+                    next_fill_reconcile_at = (
+                        monotonic() + self._fill_reconcile_interval_seconds
+                    )
                 if monotonic() >= next_quote_at:
                     await self._tick()
                     next_quote_at = monotonic() + self.config.poll_interval_seconds
-                await self._wait_for_fill_or_next_quote(next_quote_at)
+                await self._wait_for_fill_or_deadline(
+                    min(next_quote_at, next_fill_reconcile_at)
+                )
         finally:
             if self._wallet_task is not None:
                 self._wallet_task.cancel()
@@ -132,9 +142,9 @@ class MarketMakerEngine:
                 with suppress(asyncio.TimeoutError):
                     await asyncio.wait_for(self._stop.wait(), timeout=1)
 
-    async def _wait_for_fill_or_next_quote(self, next_quote_at: float) -> None:
+    async def _wait_for_fill_or_deadline(self, deadline: float) -> None:
         while not self._stop.is_set():
-            timeout = max(0, min(0.2, next_quote_at - monotonic()))
+            timeout = max(0, min(0.2, deadline - monotonic()))
             if timeout == 0:
                 return
             try:
@@ -148,7 +158,6 @@ class MarketMakerEngine:
 
     async def _tick(self) -> None:
         await self._reconcile_order_statuses()
-        await self._reconcile_buy_fills()
         await self._cancel_stale_orders()
         positions = await self.client.get_positions()
 
@@ -454,6 +463,8 @@ class MarketMakerEngine:
     async def _prepare_emergency_exit(self, filled_order: ManagedOrder) -> None:
         market_id = filled_order.quote.market_id
         self._halted_markets.add(market_id)
+        if market_id in self._prepared_emergency_markets:
+            return
         try:
             await self.client.cancel_all_orders(market_id)
         except Exception as error:  # noqa: BLE001
@@ -469,6 +480,7 @@ class MarketMakerEngine:
                 OrderStatus.OPEN,
             }:
                 order.status = OrderStatus.CANCELED
+        self._prepared_emergency_markets.add(market_id)
 
     async def _emergency_exit(self, filled_order: ManagedOrder, fill_size: Decimal) -> None:
         market_id = filled_order.quote.market_id

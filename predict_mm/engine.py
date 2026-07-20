@@ -44,8 +44,12 @@ class MarketMakerEngine:
         self._prepared_emergency_markets: set[str] = set()
         self._submitted_fill_settlements: set[str] = set()
         self._handled_fill_settlements: set[str] = set()
-        self._fill_reconcile_interval_seconds = 0.5
+        self._degraded_fill_reconcile_interval_seconds = 0.5
+        self._healthy_fill_reconcile_interval_seconds = max(
+            2.0, self.config.poll_interval_seconds
+        )
         self._emergency_retry_base_seconds = 0.5
+        self._shutdown_cancel_retry_base_seconds = 0.5
         self._order_acceptance_timeout_seconds = max(
             5.0, self.config.poll_interval_seconds * 2
         )
@@ -101,12 +105,20 @@ class MarketMakerEngine:
 
             started = True
             next_quote_at = monotonic()
-            next_fill_reconcile_at = monotonic()
+            next_fill_reconcile_at = (
+                monotonic() + self._degraded_fill_reconcile_interval_seconds
+            )
             while not self._stop.is_set():
-                if monotonic() >= next_fill_reconcile_at:
+                now = monotonic()
+                if not self._wallet_stream_connected():
+                    next_fill_reconcile_at = min(
+                        next_fill_reconcile_at,
+                        now + self._degraded_fill_reconcile_interval_seconds,
+                    )
+                if now >= next_fill_reconcile_at:
                     await self._reconcile_buy_fills()
                     next_fill_reconcile_at = (
-                        monotonic() + self._fill_reconcile_interval_seconds
+                        monotonic() + self._fill_reconcile_interval()
                     )
                 if monotonic() >= next_quote_at:
                     await self._tick()
@@ -124,9 +136,17 @@ class MarketMakerEngine:
             if self._emergency_tasks:
                 await asyncio.gather(*self._emergency_tasks, return_exceptions=True)
             if started and self.config.cancel_all_on_shutdown:
-                await self._cancel_all_known_markets()
+                await self._cancel_all_known_markets_safely()
             await self.client.close()
             logger.info("Market maker stopped")
+
+    def _wallet_stream_connected(self) -> bool:
+        return bool(getattr(self.client, "wallet_stream_connected", False))
+
+    def _fill_reconcile_interval(self) -> float:
+        if self._wallet_stream_connected():
+            return self._healthy_fill_reconcile_interval_seconds
+        return self._degraded_fill_reconcile_interval_seconds
 
     async def _watch_wallet_fills(self) -> None:
         while not self._stop.is_set():
@@ -159,12 +179,27 @@ class MarketMakerEngine:
     async def _tick(self) -> None:
         await self._reconcile_order_statuses()
         await self._cancel_stale_orders()
-        positions = await self.client.get_positions()
+        try:
+            positions = await self.client.get_positions()
+        except Exception as error:  # noqa: BLE001
+            logger.warning(
+                "Unable to read positions from Predict.fun; pausing new quotes for this cycle: %s",
+                error,
+            )
+            return
 
         for market in self.config.enabled_markets:
             if market.id in self._halted_markets:
                 continue
-            orderbook = await self.client.get_orderbook(market.id)
+            try:
+                orderbook = await self.client.get_orderbook(market.id)
+            except Exception as error:  # noqa: BLE001
+                logger.warning(
+                    "Unable to read orderbook for %s; skipping this market for this cycle: %s",
+                    market.id,
+                    error,
+                )
+                continue
             if self.config.replace_on_orderbook_change:
                 await self._cancel_orders_approached_by_market(market.id, orderbook)
             quotes = self.strategy.build_quotes(market, orderbook)
@@ -552,6 +587,36 @@ class MarketMakerEngine:
         for order in self.open_orders.values():
             order.status = OrderStatus.CANCELED
             self._remember_order(order)
+
+    async def _cancel_all_known_markets_safely(self) -> bool:
+        """Retry shutdown cancellation without masking the error that stopped the engine."""
+        for attempt in range(1, 6):
+            try:
+                await self._cancel_all_known_markets()
+                return True
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:  # noqa: BLE001
+                if attempt == 5:
+                    logger.critical(
+                        "Unable to cancel all orders during shutdown after %s attempts; "
+                        "orders still expire after 120 seconds: %s",
+                        attempt,
+                        error,
+                    )
+                    return False
+                retry_delay = min(
+                    self._shutdown_cancel_retry_base_seconds * (2 ** (attempt - 1)),
+                    4.0,
+                )
+                logger.warning(
+                    "Shutdown cancellation attempt %s failed; retrying in %.1f seconds: %s",
+                    attempt,
+                    retry_delay,
+                    error,
+                )
+                await asyncio.sleep(retry_delay)
+        return False
 
     def _restore_tracked_orders(self) -> None:
         loader = getattr(self.client, "load_tracked_orders", None)

@@ -36,6 +36,10 @@ class PredictAuthorizationError(RuntimeError):
     """A protected Predict REST request was rejected with HTTP 401."""
 
 
+class PredictTransientError(RuntimeError):
+    """Predict temporarily rejected a request that is safe to retry."""
+
+
 class PredictClient:
     """Predict.fun REST + SDK adapter.
 
@@ -57,6 +61,7 @@ class PredictClient:
         self._dry_orders: dict[str, ManagedOrder] = {}
         self._market_metadata: dict[str, dict] = {}
         self._order_journal_path = Path(settings.order_journal_path)
+        self.wallet_stream_connected = False
 
     async def close(self) -> None:
         return None
@@ -347,54 +352,59 @@ class PredictClient:
             raise RuntimeError("WebSocket support requires the websockets package.") from error
 
         subscribed_jwt = self.settings.jwt_token
-        async with connect(
-            "wss://ws.predict.fun/ws",
-            additional_headers={"x-api-key": self.settings.api_key},
-        ) as websocket:
-            await websocket.send(
-                json.dumps(
-                    {
-                        "method": "subscribe",
-                        "requestId": 1,
-                        "params": [f"predictWalletEvents/{subscribed_jwt}"],
-                    }
+        self.wallet_stream_connected = False
+        try:
+            async with connect(
+                "wss://ws.predict.fun/ws",
+                additional_headers={"x-api-key": self.settings.api_key},
+            ) as websocket:
+                await websocket.send(
+                    json.dumps(
+                        {
+                            "method": "subscribe",
+                            "requestId": 1,
+                            "params": [f"predictWalletEvents/{subscribed_jwt}"],
+                        }
+                    )
                 )
-            )
-            async for raw_message in websocket:
-                message = json.loads(raw_message)
-                if self.settings.jwt_token != subscribed_jwt:
-                    logger.info("JWT 已更新，正在重新连接钱包事件流。")
-                    return
-                error = message.get("error") if isinstance(message, dict) else None
-                if (
-                    isinstance(error, dict)
-                    and error.get("code") == "invalid_credentials"
-                ):
-                    logger.warning("钱包事件流拒绝了旧 JWT，正在自动重新生成。")
-                    await self._refresh_jwt(subscribed_jwt)
-                    return
-                if isinstance(error, dict):
-                    raise RuntimeError(
-                        "Predict.fun 钱包事件订阅失败："
-                        + str(error.get("message") or error.get("code") or "unknown error")
-                    )
+                async for raw_message in websocket:
+                    message = json.loads(raw_message)
+                    if self.settings.jwt_token != subscribed_jwt:
+                        logger.info("JWT 已更新，正在重新连接钱包事件流。")
+                        return
+                    error = message.get("error") if isinstance(message, dict) else None
+                    if (
+                        isinstance(error, dict)
+                        and error.get("code") == "invalid_credentials"
+                    ):
+                        logger.warning("钱包事件流拒绝了旧 JWT，正在自动重新生成。")
+                        await self._refresh_jwt(subscribed_jwt)
+                        return
+                    if isinstance(error, dict):
+                        raise RuntimeError(
+                            "Predict.fun 钱包事件订阅失败："
+                            + str(error.get("message") or error.get("code") or "unknown error")
+                        )
 
-                # Official WebSocket pushes use an envelope:
-                # {"type":"M", "topic":"heartbeat|predictWalletEvents/...", "data": ...}
-                if message.get("type") == "R":
-                    if message.get("requestId") == 1 and message.get("success") is True:
-                        logger.info("Predict.fun 钱包成交监听已连接。")
-                    continue
-                if message.get("type") == "M" and message.get("topic") == "heartbeat":
-                    await websocket.send(
-                        json.dumps({"method": "heartbeat", "data": message.get("data")})
-                    )
-                    continue
+                    # Official WebSocket pushes use an envelope:
+                    # {"type":"M", "topic":"heartbeat|predictWalletEvents/...", "data": ...}
+                    if message.get("type") == "R":
+                        if message.get("requestId") == 1 and message.get("success") is True:
+                            self.wallet_stream_connected = True
+                            logger.info("Predict.fun 钱包成交监听已连接。")
+                        continue
+                    if message.get("type") == "M" and message.get("topic") == "heartbeat":
+                        await websocket.send(
+                            json.dumps({"method": "heartbeat", "data": message.get("data")})
+                        )
+                        continue
 
-                payload = self._wallet_event_payload(message)
-                event = self._wallet_event(payload) if payload is not None else None
-                if event is not None:
-                    yield event
+                    payload = self._wallet_event_payload(message)
+                    event = self._wallet_event(payload) if payload is not None else None
+                    if event is not None:
+                        yield event
+        finally:
+            self.wallet_stream_connected = False
 
     async def cancel_order(self, order_id: str) -> None:
         if self.dry_run:
@@ -591,6 +601,13 @@ class PredictClient:
                         if attempt == 2:
                             raise
                         await asyncio.sleep(0.25 * (2**attempt))
+                    except PredictTransientError:
+                        # Retrying a read is safe. Retrying order creation after a
+                        # server-side 5xx could duplicate an order that was already
+                        # accepted before the response failed.
+                        if method.upper() != "GET" or attempt == 2:
+                            raise
+                        await asyncio.sleep(0.25 * (2**attempt))
             except PredictAuthorizationError:
                 if (
                     authorization_retried
@@ -679,7 +696,13 @@ class PredictClient:
             )
             detail = re.sub(r"\s+", " ", detail)[:300]
             suffix = f"：{detail}" if detail else ""
-            error_type = PredictAuthorizationError if response.status_code == 401 else RuntimeError
+            error_type = (
+                PredictAuthorizationError
+                if response.status_code == 401
+                else PredictTransientError
+                if response.status_code == 429 or response.status_code >= 500
+                else RuntimeError
+            )
             raise error_type(
                 f"Predict.fun 拒绝了 {method} {path} 请求（HTTP {response.status_code}）{suffix}"
             )

@@ -1,9 +1,13 @@
 from decimal import Decimal
 import asyncio
 import json
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
-from predict_mm.client import PredictAuthorizationError, PredictClient
+from predict_mm.client import (
+    PredictAuthorizationError,
+    PredictClient,
+    PredictTransientError,
+)
 from predict_mm.config import Settings
 from predict_mm.models import ManagedOrder, OrderStatus, Quote, Side
 
@@ -56,6 +60,62 @@ def test_rest_request_surfaces_predict_error_message() -> None:
             assert "browser's signature" in str(error)
         else:
             raise AssertionError("expected HTTP 403 to be surfaced")
+
+
+def test_rest_request_classifies_server_error_as_transient() -> None:
+    client = PredictClient(Settings(api_key="api-key"), dry_run=False)
+    response = Mock(status_code=500, content=b'{"error":"temporary failure"}')
+    response.json.return_value = {"error": "temporary failure"}
+
+    with patch("predict_mm.client.requests.request", return_value=response):
+        try:
+            client._request_sync("GET", "/v1/positions")
+        except PredictTransientError as error:
+            assert "HTTP 500" in str(error)
+        else:
+            raise AssertionError("expected HTTP 500 to be classified as transient")
+
+
+def test_protected_request_retries_transient_server_errors() -> None:
+    class StubClient(PredictClient):
+        def __init__(self) -> None:
+            super().__init__(Settings(api_key="api-key", jwt_token="jwt"), dry_run=False)
+            self.request_count = 0
+
+        def _request_sync(self, method, path, payload=None, query=None):  # type: ignore[no-untyped-def]
+            self.request_count += 1
+            if self.request_count < 3:
+                raise PredictTransientError("HTTP 500: temporary failure")
+            return {"data": []}
+
+    client = StubClient()
+    with patch("predict_mm.client.asyncio.sleep", new=AsyncMock()) as sleep:
+        result = asyncio.run(client._request("GET", "/v1/orders"))
+
+    assert result == {"data": []}
+    assert client.request_count == 3
+    assert sleep.await_count == 2
+
+
+def test_order_creation_does_not_retry_transient_server_error() -> None:
+    class StubClient(PredictClient):
+        def __init__(self) -> None:
+            super().__init__(Settings(api_key="api-key", jwt_token="jwt"), dry_run=False)
+            self.request_count = 0
+
+        def _request_sync(self, method, path, payload=None, query=None):  # type: ignore[no-untyped-def]
+            self.request_count += 1
+            raise PredictTransientError("HTTP 500: failed to create order")
+
+    client = StubClient()
+    try:
+        asyncio.run(client._request("POST", "/v1/orders", {"data": {}}))
+    except PredictTransientError:
+        pass
+    else:
+        raise AssertionError("expected order creation failure to surface without retrying")
+
+    assert client.request_count == 1
 
 
 def test_protected_request_refreshes_expired_jwt_and_retries_once() -> None:
@@ -576,7 +636,11 @@ def test_wallet_stream_answers_official_heartbeat_and_yields_enveloped_fill() ->
             return None
 
     async def collect_events(client: PredictClient) -> list:  # type: ignore[type-arg]
-        return [event async for event in client.stream_wallet_fill_events()]
+        events = []
+        async for event in client.stream_wallet_fill_events():
+            assert client.wallet_stream_connected is True
+            events.append(event)
+        return events
 
     websocket = FakeWebSocket()
     client = PredictClient(Settings(api_key="api-key", jwt_token="jwt"), dry_run=False)
@@ -597,6 +661,7 @@ def test_wallet_stream_answers_official_heartbeat_and_yields_enveloped_fill() ->
     assert len(events) == 1
     assert events[0].order_id == "order-1"
     assert events[0].filled_size == Decimal("1")
+    assert client.wallet_stream_connected is False
 
 
 def test_get_order_filled_amounts_maps_id_and_hash() -> None:

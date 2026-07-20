@@ -458,6 +458,72 @@ def test_rejected_passive_quote_does_not_stop_tick_or_fill_monitoring(caplog) ->
     assert "keeping the bot running" in caplog.text
 
 
+def test_position_server_error_pauses_quote_cycle_without_stopping_engine(caplog) -> None:
+    class PositionFailureClient(RepriceClient):
+        async def get_positions(self) -> dict[str, Decimal]:
+            raise RuntimeError("HTTP 500: fetch positions by wallet id")
+
+    client = PositionFailureClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+
+    with caplog.at_level("WARNING", logger="predict-mm"):
+        asyncio.run(engine._tick())
+
+    assert client.created == []
+    assert "pausing new quotes for this cycle" in caplog.text
+
+
+def test_fill_reconciliation_is_fast_only_while_wallet_stream_is_disconnected() -> None:
+    client = EmergencyClient()
+    client.wallet_stream_connected = False
+    engine = MarketMakerEngine(
+        config=BotConfig(
+            poll_interval_seconds=2,
+            markets=[MarketConfig(id="market-1")],
+        ),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+
+    assert engine._fill_reconcile_interval() == 0.5
+    client.wallet_stream_connected = True
+    assert engine._fill_reconcile_interval() == 2.0
+
+
+def test_shutdown_cancel_retries_without_raising(caplog) -> None:
+    class TemporaryCancelFailureClient(EmergencyClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts = 0
+
+        async def cancel_all_orders(self, market_id: str | None) -> None:
+            self.attempts += 1
+            if self.attempts < 3:
+                raise RuntimeError("HTTP 500: fetch orders for wallet")
+
+    client = TemporaryCancelFailureClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+    engine._shutdown_cancel_retry_base_seconds = 0
+
+    with caplog.at_level("WARNING", logger="predict-mm"):
+        result = asyncio.run(engine._cancel_all_known_markets_safely())
+
+    assert result is True
+    assert client.attempts == 3
+    assert "Shutdown cancellation attempt 1 failed" in caplog.text
+
+
 def test_approached_buy_quote_is_canceled_and_repriced_in_same_tick() -> None:
     client = RepriceClient()
     engine = MarketMakerEngine(

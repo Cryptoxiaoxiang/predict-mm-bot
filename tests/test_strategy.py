@@ -7,7 +7,11 @@ from predict_mm.strategy import PassiveMakerStrategy
 
 def test_strategy_quotes_away_from_touch() -> None:
     strategy = PassiveMakerStrategy(
-        StrategyConfig(tick_size=Decimal("0.001"), quote_size=Decimal("1"), min_edge_ticks=2)
+        StrategyConfig(
+            tick_size=Decimal("0.001"),
+            quote_size=Decimal("1"),
+            min_edge_ticks=2,
+        )
     )
     book = OrderBook(
         market_id="m1",
@@ -36,7 +40,25 @@ def test_strategy_builds_both_binary_choices_only_when_requested() -> None:
 
     assert [(quote.side, quote.outcome, quote.price) for quote in quotes] == [
         (Side.BUY, "Yes", Decimal("0.491")),
-        (Side.BUY, "No", Decimal("0.509")),
+        (Side.BUY, "No", Decimal("0.491")),
+    ]
+
+
+def test_strategy_complements_yes_ask_for_no_quote() -> None:
+    strategy = PassiveMakerStrategy(
+        StrategyConfig(tick_size=Decimal("0.001"), quote_size=Decimal("1"), min_edge_ticks=2)
+    )
+    book = OrderBook(
+        market_id="m1",
+        bids=[Level(Decimal("0.018"), Decimal("100"))],
+        asks=[Level(Decimal("0.019"), Decimal("100"))],
+        tick_size=Decimal("0.001"),
+    )
+
+    quotes = strategy.build_quotes(MarketConfig(id="m1", outcome="NO"), book)
+
+    assert [(quote.side, quote.outcome, quote.price) for quote in quotes] == [
+        (Side.BUY, "NO", Decimal("0.979")),
     ]
 
 

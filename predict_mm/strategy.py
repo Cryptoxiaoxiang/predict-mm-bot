@@ -37,6 +37,11 @@ class PassiveMakerStrategy:
 
         bid = quantize_price(raw_bid, tick_size, Side.BUY)
         ask = quantize_price(raw_ask, tick_size, Side.SELL)
+        # Predict's orderbook is always expressed in YES prices.  A NO bid is
+        # therefore the complement of the YES ask, not the YES ask itself.
+        # Quantize again at the market precision to avoid Decimal values that
+        # the backend cannot represent.
+        no_bid = quantize_price(Decimal("1") - ask, tick_size, Side.BUY)
 
         if bid <= Decimal("0") or ask >= Decimal("1") or bid >= ask:
             return []
@@ -58,7 +63,7 @@ class PassiveMakerStrategy:
 
         selected = market.outcome.strip().upper()
         if selected in {"YES_NO", "YES&NO", "YES AND NO"}:
-            return [buy("Yes", bid), buy("No", ask)]
+            return [buy("Yes", bid), buy("No", no_bid)]
         if selected == "NO":
-            return [buy(market.outcome, ask)]
+            return [buy(market.outcome, no_bid)]
         return [buy(market.outcome, bid)]

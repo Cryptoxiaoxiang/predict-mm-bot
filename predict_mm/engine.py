@@ -352,14 +352,26 @@ class MarketMakerEngine:
             ):
                 continue
 
-            best_price = orderbook.best_bid if order.quote.side == Side.BUY else orderbook.best_ask
-            if best_price is None:
-                continue
+            if order.quote.side == Side.BUY and order.quote.outcome.strip().upper() == "NO":
+                # Predict publishes only the YES book.  The current NO bid is
+                # the complement of the best YES ask.
+                if orderbook.best_ask is None:
+                    continue
+                touch_price = Decimal("1") - orderbook.best_ask.price
+            else:
+                best_price = (
+                    orderbook.best_bid
+                    if order.quote.side == Side.BUY
+                    else orderbook.best_ask
+                )
+                if best_price is None:
+                    continue
+                touch_price = best_price.price
 
             is_approached = (
-                best_price.price <= order.quote.price + tick_size
+                touch_price <= order.quote.price + tick_size
                 if order.quote.side == Side.BUY
-                else best_price.price >= order.quote.price - tick_size
+                else touch_price >= order.quote.price - tick_size
             )
             if not is_approached:
                 continue
@@ -369,7 +381,7 @@ class MarketMakerEngine:
                 order.quote.side.value,
                 order.quote.price,
                 market_id,
-                best_price.price,
+                touch_price,
             )
             await self._cancel_order_safely(order)
 

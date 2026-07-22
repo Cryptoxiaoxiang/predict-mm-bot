@@ -34,3 +34,5 @@ def test_run_duration_controls_and_dashboard_countdown_are_present() -> None:
     assert 'id="expiry-value"' in html
     assert "updateDurationCountdown" in javascript
     assert "run_expires_at" in javascript
+    assert "runDurationEnabled.checked = true" in javascript
+    assert "runDurationHours.disabled" not in javascript

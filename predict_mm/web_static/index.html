@@ -93,11 +93,13 @@
                 <label class="field"><span>总最大仓位</span><input name="max_total_position" inputmode="decimal" value="50.0" required /></label>
                 <label class="field"><span class="label-with-help">撤单等待秒数 <span class="tooltip" tabindex="0">?<span class="tooltip-text" role="tooltip">每笔挂单最多保留多久。到达该时间后，机器人会撤单并根据最新盘口重新报价。</span></span></span><input name="cancel_after_seconds" inputmode="decimal" value="8" required /></label>
               </div>
-              <label class="switch-row"><span><strong>设置挂单有效期</strong><small>从每次启动机器人时开始倒计时；到期后撤销全部订单并停止机器人</small></span><span class="switch-control"><input id="run-duration-enabled" type="checkbox" name="run_duration_enabled" /><i></i></span></label>
-              <div id="run-duration-fields" class="duration-picker" aria-label="挂单有效期">
-                <label class="field"><span>小时</span><select name="run_duration_hours" aria-label="有效期小时"></select></label>
-                <label class="field"><span>分钟</span><select name="run_duration_minutes" aria-label="有效期分钟"></select></label>
-                <p>未勾选时机器人会一直运行，直到手动停止。</p>
+              <div class="switch-row duration-setting-row">
+                <span class="duration-setting-copy"><strong>设置挂单有效期</strong><small>从每次启动机器人时开始倒计时；到期后撤销全部订单并停止机器人</small></span>
+                <label class="switch-control" title="是否启用挂单有效期"><input id="run-duration-enabled" type="checkbox" name="run_duration_enabled" /><i></i></label>
+                <div id="run-duration-fields" class="duration-picker" aria-label="挂单有效期">
+                  <select name="run_duration_hours" aria-label="有效期小时"></select>
+                  <select name="run_duration_minutes" aria-label="有效期分钟"></select>
+                </div>
               </div>
               <label class="switch-row"><span><strong>买单被吃单后立即卖出</strong><small>包括 Yes 与 No；成交保护启用后会停止对应市场继续报价</small></span><span class="switch-control"><input type="checkbox" name="emergency_exit_on_buy_fill" checked /><i></i></span><span class="tooltip" tabindex="0">?<span class="tooltip-text" role="tooltip">实盘专用。买单被吃单（包括部分成交）时，机器人会撤掉该市场其他订单，并以 0.01 的非 post-only 限价卖单卖出已成交数量。这可能会造成损失。</span></span></label>
               <label class="switch-row"><span><strong>模拟运行</strong><small>开启后只计算报价和写入日志，不会创建真实订单</small></span><span class="switch-control"><input type="checkbox" name="dry_run" /><i></i></span></label>

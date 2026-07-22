@@ -45,9 +45,7 @@ function updateDurationFields({applyDefault = false} = {}) {
       && Number(runDurationMinutes.value) === 0) {
     runDurationHours.value = '1';
   }
-  runDurationHours.disabled = !enabled;
-  runDurationMinutes.disabled = !enabled;
-  runDurationFields.classList.toggle('disabled', !enabled);
+  runDurationFields.classList.toggle('inactive', !enabled);
 }
 
 function formatRemainingDuration(totalSeconds) {
@@ -621,6 +619,12 @@ document.querySelector('#add-market-button').addEventListener('click', () => {
 form.addEventListener('input', () => { formDirty = true; });
 form.addEventListener('change', () => { formDirty = true; });
 runDurationEnabled.addEventListener('change', () => updateDurationFields({applyDefault: true}));
+[runDurationHours, runDurationMinutes].forEach((select) => {
+  select.addEventListener('change', () => {
+    runDurationEnabled.checked = true;
+    updateDurationFields();
+  });
+});
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   const values = Object.fromEntries(new FormData(form));

@@ -7,8 +7,81 @@ const approvalStatus = document.querySelector('#approval-status');
 const approvalSteps = document.querySelector('#approval-steps');
 const checkApprovalsButton = document.querySelector('#check-approvals');
 const setApprovalsButton = document.querySelector('#set-approvals');
+const logPanels = [...document.querySelectorAll('.log-preview, .full-log')];
+const logRefreshStatus = document.querySelector('#log-refresh-status');
+const logRefreshStatusText = document.querySelector('#log-refresh-status-text');
+const runDurationEnabled = form.elements.namedItem('run_duration_enabled');
+const runDurationHours = form.elements.namedItem('run_duration_hours');
+const runDurationMinutes = form.elements.namedItem('run_duration_minutes');
+const runDurationFields = document.querySelector('#run-duration-fields');
 let formDirty = false;
 let approvalActionRunning = false;
+let logInteractionPaused = false;
+let logRefreshPaused = false;
+let logRefreshPending = false;
+let logRequestInFlight = false;
+let botRunning = false;
+let configuredRunDurationSeconds = 0;
+let runExpiresAtMs = null;
+
+function populateDurationOptions() {
+  runDurationHours.replaceChildren(...Array.from({length: 73}, (_, hour) => {
+    const option = document.createElement('option');
+    option.value = String(hour);
+    option.textContent = `${hour} 小时`;
+    return option;
+  }));
+  runDurationMinutes.replaceChildren(...Array.from({length: 60}, (_, minute) => {
+    const option = document.createElement('option');
+    option.value = String(minute);
+    option.textContent = `${minute} 分钟`;
+    return option;
+  }));
+}
+
+function updateDurationFields({applyDefault = false} = {}) {
+  const enabled = runDurationEnabled.checked;
+  if (enabled && applyDefault && Number(runDurationHours.value) === 0
+      && Number(runDurationMinutes.value) === 0) {
+    runDurationHours.value = '1';
+  }
+  runDurationHours.disabled = !enabled;
+  runDurationMinutes.disabled = !enabled;
+  runDurationFields.classList.toggle('disabled', !enabled);
+}
+
+function formatRemainingDuration(totalSeconds) {
+  const seconds = Math.max(0, Math.ceil(totalSeconds));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainder = seconds % 60;
+  return [hours, minutes, remainder]
+    .map((value) => String(value).padStart(2, '0'))
+    .join(':');
+}
+
+function updateDurationCountdown() {
+  const value = document.querySelector('#expiry-value');
+  const note = document.querySelector('#expiry-note');
+  if (!configuredRunDurationSeconds) {
+    value.textContent = '不限时';
+    value.className = 'metric-value';
+    note.textContent = '未设置自动停止';
+    return;
+  }
+  if (!botRunning || !runExpiresAtMs) {
+    value.textContent = '未启动';
+    value.className = 'metric-value warning';
+    note.textContent = `启动后倒计时 ${formatRemainingDuration(configuredRunDurationSeconds)}`;
+    return;
+  }
+  const remainingSeconds = Math.max(0, (runExpiresAtMs - Date.now()) / 1000);
+  value.textContent = remainingSeconds > 0
+    ? formatRemainingDuration(remainingSeconds)
+    : '正在停止…';
+  value.className = `metric-value ${remainingSeconds > 60 ? 'positive' : 'warning'}`;
+  note.textContent = '到期后自动撤单并停止';
+}
 
 function switchView(name) {
   const target = document.querySelector(`[data-view-name="${name}"]`) || document.getElementById(name);
@@ -397,6 +470,11 @@ async function refreshStatus() {
     badge.textContent = mode;
     badge.className = `pill ${status.dry_run ? '' : 'live'}`;
     const runStatus = document.querySelector('#run-status');
+    botRunning = status.running;
+    configuredRunDurationSeconds = Number(status.run_duration_seconds) || 0;
+    const parsedExpiry = status.run_expires_at ? Date.parse(status.run_expires_at) : NaN;
+    runExpiresAtMs = status.running && Number.isFinite(parsedExpiry) ? parsedExpiry : null;
+    updateDurationCountdown();
     runStatus.textContent = status.running ? '运行中' : (status.configured ? '已停止' : '等待配置');
     runStatus.className = `metric-value ${status.running ? 'positive' : 'warning'}`;
     document.querySelector('#run-status-note').textContent = status.running
@@ -426,6 +504,11 @@ async function refreshStatus() {
       setField('cancel_after_seconds', status.cancel_after_seconds);
       setField('max_position_per_market', status.max_position_per_market);
       setField('max_total_position', status.max_total_position);
+      const durationSeconds = Number(status.run_duration_seconds) || 0;
+      runDurationEnabled.checked = Boolean(status.run_duration_enabled);
+      runDurationHours.value = String(Math.floor(durationSeconds / 3600));
+      runDurationMinutes.value = String(Math.floor((durationSeconds % 3600) / 60));
+      updateDurationFields();
       form.elements.namedItem('dry_run').checked = status.dry_run;
       form.elements.namedItem('emergency_exit_on_buy_fill').checked = status.emergency_exit_on_buy_fill;
     }
@@ -451,19 +534,85 @@ async function refreshStatus() {
   }
 }
 
-async function refreshLogs() {
+function selectionIsInsideLogs() {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return false;
+  return logPanels.some((panel) => (
+    (selection.anchorNode && panel.contains(selection.anchorNode))
+    || (selection.focusNode && panel.contains(selection.focusNode))
+  ));
+}
+
+function updateLogRefreshPauseState() {
+  const paused = logInteractionPaused || selectionIsInsideLogs();
+  if (paused === logRefreshPaused) return;
+  logRefreshPaused = paused;
+  logPanels.forEach((panel) => panel.classList.toggle('paused', paused));
+  logRefreshStatus.classList.toggle('paused', paused);
+  logRefreshStatusText.textContent = paused
+    ? '已暂停（点击日志外恢复）'
+    : '每 2 秒更新';
+  if (!paused) refreshLogs({force: true});
+}
+
+async function refreshLogs({force = false} = {}) {
+  if (!force && logRefreshPaused) {
+    logRefreshPending = true;
+    return;
+  }
+  if (logRequestInFlight) {
+    logRefreshPending = true;
+    return;
+  }
+  logRequestInFlight = true;
   try {
     const { lines } = await request('/api/logs');
+    if (!force && logRefreshPaused) {
+      logRefreshPending = true;
+      return;
+    }
     const logs = document.querySelector('#logs');
     logs.textContent = lines.length ? lines.join('\n') : '暂无运行日志。';
     logs.scrollTop = logs.scrollHeight;
     const preview = document.querySelector('#dashboard-logs');
     preview.textContent = lines.length ? lines.slice(-6).join('\n') : '暂无运行日志。';
     preview.scrollTop = preview.scrollHeight;
+    logRefreshPending = false;
   } catch (error) {
     showNotice(error.message, 'error');
+  } finally {
+    logRequestInFlight = false;
+    if (!logRefreshPaused && logRefreshPending) {
+      logRefreshPending = false;
+      queueMicrotask(() => refreshLogs({force: true}));
+    }
   }
 }
+
+logPanels.forEach((panel) => {
+  panel.addEventListener('focus', () => {
+    logInteractionPaused = true;
+    updateLogRefreshPauseState();
+  });
+  panel.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    window.getSelection()?.removeAllRanges();
+    logInteractionPaused = false;
+    panel.blur();
+    updateLogRefreshPauseState();
+  });
+});
+
+document.addEventListener('pointerdown', (event) => {
+  if (event.target.closest?.('.log-preview, .full-log')) {
+    logInteractionPaused = true;
+    updateLogRefreshPauseState();
+    return;
+  }
+  logInteractionPaused = false;
+  requestAnimationFrame(updateLogRefreshPauseState);
+});
+document.addEventListener('selectionchange', updateLogRefreshPauseState);
 
 document.querySelector('#add-market-button').addEventListener('click', () => {
   addMarket();
@@ -471,12 +620,16 @@ document.querySelector('#add-market-button').addEventListener('click', () => {
 });
 form.addEventListener('input', () => { formDirty = true; });
 form.addEventListener('change', () => { formDirty = true; });
+runDurationEnabled.addEventListener('change', () => updateDurationFields({applyDefault: true}));
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   const values = Object.fromEntries(new FormData(form));
   values.markets = collectMarkets();
   values.dry_run = form.elements.namedItem('dry_run').checked;
   values.emergency_exit_on_buy_fill = form.elements.namedItem('emergency_exit_on_buy_fill').checked;
+  values.run_duration_enabled = runDurationEnabled.checked;
+  values.run_duration_hours = Number(runDurationHours.value);
+  values.run_duration_minutes = Number(runDurationMinutes.value);
   try {
     const result = await request('/api/setup', {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(values),
@@ -542,11 +695,14 @@ document.querySelector('#cancel-button').addEventListener('click', async () => {
   if (!confirm('确定要撤销所有已配置市场的订单吗？')) return;
   try { showNotice((await request('/api/cancel-all', {method: 'POST'})).message); } catch (error) { showNotice(error.message, 'error'); }
 });
-document.querySelector('#refresh-logs').addEventListener('click', refreshLogs);
+document.querySelector('#refresh-logs').addEventListener('click', () => refreshLogs({force: true}));
 
+populateDurationOptions();
+updateDurationFields();
 renderMarkets();
 refreshStatus();
 refreshLogs();
 refreshBalance();
 setInterval(() => { refreshStatus(); refreshLogs(); }, 2000);
+setInterval(updateDurationCountdown, 1000);
 setInterval(refreshBalance, 30000);

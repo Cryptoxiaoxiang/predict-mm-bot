@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from contextlib import suppress
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from time import monotonic
 
@@ -53,9 +55,29 @@ class MarketMakerEngine:
         self._order_acceptance_timeout_seconds = max(
             5.0, self.config.poll_interval_seconds * 2
         )
+        self._run_deadline: float | None = (
+            monotonic() + self.config.run_duration_seconds
+            if self.config.run_duration_seconds > 0
+            else None
+        )
+        self._run_expires_at: datetime | None = (
+            datetime.now(timezone.utc) + timedelta(seconds=self.config.run_duration_seconds)
+            if self.config.run_duration_seconds > 0
+            else None
+        )
 
     def request_stop(self) -> None:
         self._stop.set()
+
+    @property
+    def run_expires_at(self) -> str | None:
+        return self._run_expires_at.isoformat() if self._run_expires_at else None
+
+    @property
+    def run_remaining_seconds(self) -> int | None:
+        if self._run_deadline is None:
+            return None
+        return max(0, math.ceil(self._run_deadline - monotonic()))
 
     def market_title(self, market_id: str) -> str:
         configured = next(
@@ -103,6 +125,13 @@ class MarketMakerEngine:
             if not self.config.dry_run:
                 self._wallet_task = asyncio.create_task(self._watch_wallet_fills())
 
+            if self._run_deadline is not None:
+                logger.info(
+                    "Run duration enabled: orders will be cancelled and the market maker "
+                    "will stop in %s seconds",
+                    self.config.run_duration_seconds,
+                )
+
             started = True
             next_quote_at = monotonic()
             next_fill_reconcile_at = (
@@ -110,6 +139,10 @@ class MarketMakerEngine:
             )
             while not self._stop.is_set():
                 now = monotonic()
+                if self._run_deadline is not None and now >= self._run_deadline:
+                    logger.info("Run duration reached; cancelling orders and stopping market maker")
+                    self._stop.set()
+                    break
                 if not self._wallet_stream_connected():
                     next_fill_reconcile_at = min(
                         next_fill_reconcile_at,
@@ -123,9 +156,10 @@ class MarketMakerEngine:
                 if monotonic() >= next_quote_at:
                     await self._tick()
                     next_quote_at = monotonic() + self.config.poll_interval_seconds
-                await self._wait_for_fill_or_deadline(
-                    min(next_quote_at, next_fill_reconcile_at)
-                )
+                next_deadline = min(next_quote_at, next_fill_reconcile_at)
+                if self._run_deadline is not None:
+                    next_deadline = min(next_deadline, self._run_deadline)
+                await self._wait_for_fill_or_deadline(next_deadline)
         finally:
             if self._wallet_task is not None:
                 self._wallet_task.cancel()

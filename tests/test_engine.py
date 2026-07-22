@@ -74,6 +74,45 @@ def test_buy_fill_cancels_market_and_creates_emergency_sell() -> None:
     assert post_only is False
 
 
+def test_run_duration_stops_engine_and_cancels_orders() -> None:
+    class TimedRunClient:
+        def __init__(self) -> None:
+            self.cancel_calls = 0
+            self.closed = False
+
+        async def cancel_all_orders(self, market_id: str | None) -> None:
+            assert market_id is None
+            self.cancel_calls += 1
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class IdleEngine(MarketMakerEngine):
+        async def _tick(self) -> None:
+            return
+
+    client = TimedRunClient()
+    engine = IdleEngine(
+        config=BotConfig(
+            dry_run=True,
+            poll_interval_seconds=1,
+            run_duration_seconds=0.05,  # type: ignore[arg-type]
+            cancel_all_on_start=False,
+            markets=[MarketConfig(id="market-1")],
+        ),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+
+    asyncio.run(asyncio.wait_for(engine.run(), timeout=0.5))
+
+    assert engine.run_remaining_seconds == 0
+    assert engine.run_expires_at is not None
+    assert client.cancel_calls == 1
+    assert client.closed is True
+
+
 def test_cancelled_buy_fill_still_exits_once_per_settlement() -> None:
     client = EmergencyClient()
     engine = MarketMakerEngine(

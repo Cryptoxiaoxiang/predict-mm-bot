@@ -20,6 +20,7 @@ class WizardAnswers:
     token_id: str = ""
     quote_size: str = "1.0"
     cancel_after_seconds: str = "8"
+    run_duration_seconds: int = 0
     max_position_per_market: str = "10.0"
     max_total_position: str = "50.0"
 
@@ -104,6 +105,7 @@ token_id = "{_toml_escape(market.token_id)}"
     return f"""dry_run = {_toml_bool(answers.dry_run)}
 poll_interval_seconds = 2.0
 cancel_after_seconds = {answers.cancel_after_seconds}
+run_duration_seconds = {answers.run_duration_seconds}
 replace_on_orderbook_change = true
 cancel_all_on_start = true
 cancel_all_on_shutdown = true

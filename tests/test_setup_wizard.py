@@ -57,3 +57,11 @@ def test_build_config_text_can_enable_emergency_exit() -> None:
     text = build_config_text(WizardAnswers(market_id="market", emergency_exit_on_buy_fill=True))
 
     assert "emergency_exit_on_buy_fill = true" in text
+
+
+def test_build_config_text_can_set_run_duration() -> None:
+    text = build_config_text(
+        WizardAnswers(market_id="market", run_duration_seconds=4 * 3600 + 30 * 60)
+    )
+
+    assert "run_duration_seconds = 16200" in text

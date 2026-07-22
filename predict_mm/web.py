@@ -41,6 +41,9 @@ class SetupPayload(BaseModel):
     emergency_exit_on_buy_fill: bool = True
     markets: list[MarketPayload] = Field(min_length=1, max_length=50)
     cancel_after_seconds: str = "8"
+    run_duration_enabled: bool = False
+    run_duration_hours: int = Field(default=0, ge=0, le=72)
+    run_duration_minutes: int = Field(default=0, ge=0, le=59)
     max_position_per_market: str = "10.0"
     max_total_position: str = "50.0"
 
@@ -119,6 +122,12 @@ class DashboardState:
             "max_position_per_market": str(config.risk.max_position_per_market) if config else "10.0",
             "max_total_position": str(config.risk.max_total_position) if config else "50.0",
             "cancel_after_seconds": config.cancel_after_seconds if config else 8,
+            "run_duration_enabled": bool(config and config.run_duration_seconds > 0),
+            "run_duration_seconds": config.run_duration_seconds if config else 0,
+            "run_expires_at": self.engine.run_expires_at if self.engine else None,
+            "run_remaining_seconds": (
+                self.engine.run_remaining_seconds if self.engine else None
+            ),
             "emergency_exit_on_buy_fill": config.emergency_exit_on_buy_fill if config else True,
             "open_orders": self.engine.active_orders() if self.engine else [],
             "api_key_set": bool(settings.api_key),
@@ -415,6 +424,11 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
             for market in payload.markets
         ]
         max_quote_size = max(Decimal(market.quote_size) for market in market_answers)
+        run_duration_seconds = (
+            payload.run_duration_hours * 3600 + payload.run_duration_minutes * 60
+            if payload.run_duration_enabled
+            else 0
+        )
         answers = WizardAnswers(
             api_base_url=current.api_base_url,
             api_key=current.api_key or "",
@@ -428,6 +442,7 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
             outcome=market_answers[0].outcome,
             quote_size=str(max_quote_size),
             cancel_after_seconds=payload.cancel_after_seconds.strip(),
+            run_duration_seconds=run_duration_seconds,
             max_position_per_market=payload.max_position_per_market.strip(),
             max_total_position=payload.max_total_position.strip(),
         )
@@ -577,6 +592,13 @@ def _validate_setup(payload: SetupPayload) -> None:
                 detail="请先点击“识别网址”并选择正确市场，再保存配置。",
             )
     try:
+        if payload.run_duration_enabled and (
+            payload.run_duration_hours * 60 + payload.run_duration_minutes <= 0
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="启用有效期时，小时和分钟不能同时为 0。",
+            )
         for value in (
             payload.cancel_after_seconds,
             payload.max_position_per_market,

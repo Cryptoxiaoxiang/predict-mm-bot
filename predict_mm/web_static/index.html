@@ -40,6 +40,7 @@
             <article class="metric" title="账户地址上的链上 USDT 余额；不含预测持仓的市值。"><div class="metric-label">账户 USDT 余额</div><strong id="balance-value" class="metric-value">读取中…</strong><div id="balance-note" class="metric-note">每 30 秒刷新</div></article>
             <article class="metric"><div class="metric-label">当前开放订单</div><strong id="open-order-value" class="metric-value positive">0</strong><div id="open-order-note" class="metric-note">暂无机器人管理的挂单</div></article>
             <article class="metric"><div class="metric-label">已配置市场</div><strong id="market-value" class="metric-value">—</strong><div id="configured-note" class="metric-note">等待加载配置</div></article>
+            <article class="metric"><div class="metric-label">挂单有效期剩余</div><strong id="expiry-value" class="metric-value">—</strong><div id="expiry-note" class="metric-note">正在读取有效期设置</div></article>
           </section>
 
           <div class="dashboard-grid">
@@ -53,7 +54,7 @@
                 <div class="risk-row"><strong>单市场最大仓位</strong><span id="risk-market">—</span></div>
                 <div class="risk-row"><strong>买单被吃单后立即卖出</strong><span id="risk-emergency">—</span></div>
               </div></section>
-              <section class="card"><div class="card-head"><div><h2>最新日志</h2><p>最近的运行信息</p></div><button class="text-button" data-view-target="logs">全部日志</button></div><div class="card-body"><pre id="dashboard-logs" class="log-preview">等待日志…</pre></div></section>
+              <section class="card"><div class="card-head"><div><h2>最新日志</h2><p>最近的运行信息</p></div><button class="text-button" data-view-target="logs">全部日志</button></div><div class="card-body"><pre id="dashboard-logs" class="log-preview" tabindex="0">等待日志…</pre></div></section>
             </div>
           </div>
           <div class="dashboard-actions"><button id="cancel-button" class="btn danger">撤销所有市场订单</button></div>
@@ -92,6 +93,12 @@
                 <label class="field"><span>总最大仓位</span><input name="max_total_position" inputmode="decimal" value="50.0" required /></label>
                 <label class="field"><span class="label-with-help">撤单等待秒数 <span class="tooltip" tabindex="0">?<span class="tooltip-text" role="tooltip">每笔挂单最多保留多久。到达该时间后，机器人会撤单并根据最新盘口重新报价。</span></span></span><input name="cancel_after_seconds" inputmode="decimal" value="8" required /></label>
               </div>
+              <label class="switch-row"><span><strong>设置挂单有效期</strong><small>从每次启动机器人时开始倒计时；到期后撤销全部订单并停止机器人</small></span><span class="switch-control"><input id="run-duration-enabled" type="checkbox" name="run_duration_enabled" /><i></i></span></label>
+              <div id="run-duration-fields" class="duration-picker" aria-label="挂单有效期">
+                <label class="field"><span>小时</span><select name="run_duration_hours" aria-label="有效期小时"></select></label>
+                <label class="field"><span>分钟</span><select name="run_duration_minutes" aria-label="有效期分钟"></select></label>
+                <p>未勾选时机器人会一直运行，直到手动停止。</p>
+              </div>
               <label class="switch-row"><span><strong>买单被吃单后立即卖出</strong><small>包括 Yes 与 No；成交保护启用后会停止对应市场继续报价</small></span><span class="switch-control"><input type="checkbox" name="emergency_exit_on_buy_fill" checked /><i></i></span><span class="tooltip" tabindex="0">?<span class="tooltip-text" role="tooltip">实盘专用。买单被吃单（包括部分成交）时，机器人会撤掉该市场其他订单，并以 0.01 的非 post-only 限价卖单卖出已成交数量。这可能会造成损失。</span></span></label>
               <label class="switch-row"><span><strong>模拟运行</strong><small>开启后只计算报价和写入日志，不会创建真实订单</small></span><span class="switch-control"><input type="checkbox" name="dry_run" /><i></i></span></label>
               <div class="form-actions"><button class="btn primary" type="submit">保存挂单设置</button></div>
@@ -100,8 +107,8 @@
         </section>
 
         <section id="logs-view" class="view" data-view-name="logs">
-          <header class="topbar"><div><p class="eyebrow">SYSTEM LOGS</p><h1>运行日志</h1><p class="subtitle">查看机器人、订单和成交保护的完整记录</p></div><div class="actions"><span class="status-badge"><span class="dot"></span>每 2 秒更新</span><button id="refresh-logs" class="btn primary">刷新</button></div></header>
-          <section class="card page-card"><div class="card-head"><div><h2>实时日志</h2><p>仅显示当前网页服务保留的最近记录</p></div></div><div class="card-body"><pre id="logs" class="full-log">等待日志…</pre></div></section>
+          <header class="topbar"><div><p class="eyebrow">SYSTEM LOGS</p><h1>运行日志</h1><p class="subtitle">查看机器人、订单和成交保护的完整记录</p></div><div class="actions"><span id="log-refresh-status" class="status-badge"><span class="dot"></span><span id="log-refresh-status-text">每 2 秒更新</span></span><button id="refresh-logs" class="btn primary">刷新</button></div></header>
+          <section class="card page-card"><div class="card-head"><div><h2>实时日志</h2><p>点击日志或选择文字时暂停更新；点击日志框外恢复</p></div></div><div class="card-body"><pre id="logs" class="full-log" tabindex="0">等待日志…</pre></div></section>
         </section>
       </div></main>
     </div>

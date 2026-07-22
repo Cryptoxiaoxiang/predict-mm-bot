@@ -120,3 +120,19 @@ def test_setup_rejects_a_url_that_has_not_been_resolved() -> None:
         assert "识别网址" in str(error.detail)
     else:
         raise AssertionError("expected unresolved market URL to fail")
+
+
+def test_setup_rejects_enabled_zero_run_duration() -> None:
+    payload = SetupPayload(
+        markets=[MarketPayload(market_id="42")],
+        run_duration_enabled=True,
+        run_duration_hours=0,
+        run_duration_minutes=0,
+    )
+
+    try:
+        _validate_setup(payload)
+    except Exception as error:
+        assert "不能同时为 0" in str(error.detail)
+    else:
+        raise AssertionError("expected zero run duration to fail")

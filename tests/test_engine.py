@@ -19,9 +19,10 @@ from predict_mm.strategy import PassiveMakerStrategy
 
 
 class EmergencyClient:
-    def __init__(self) -> None:
+    def __init__(self, tick_size: Decimal = Decimal("0.01")) -> None:
         self.cancelled_markets: list[str] = []
         self.created: list[tuple[Quote, bool]] = []
+        self.tick_size = tick_size
 
     async def cancel_all_orders(self, market_id: str) -> None:
         self.cancelled_markets.append(market_id)
@@ -29,6 +30,9 @@ class EmergencyClient:
     async def create_order(self, quote: Quote, *, post_only: bool = True) -> ManagedOrder:
         self.created.append((quote, post_only))
         return ManagedOrder(order_id="emergency-exit", quote=quote, created_at=0)
+
+    async def get_orderbook(self, market_id: str) -> OrderBook:
+        return OrderBook(market_id, bids=[], asks=[], tick_size=self.tick_size)
 
 
 async def handle_fill_and_wait(engine: MarketMakerEngine, event: WalletFillEvent) -> None:
@@ -71,6 +75,34 @@ def test_buy_fill_cancels_market_and_creates_emergency_sell() -> None:
     assert quote.side == Side.SELL
     assert quote.price == Decimal("0.01")
     assert quote.size == Decimal("2")
+    assert post_only is False
+
+
+def test_emergency_sell_uses_point_zero_zero_one_for_finer_tick() -> None:
+    client = EmergencyClient(tick_size=Decimal("0.001"))
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+    maker_order = ManagedOrder(
+        order_id="maker-order",
+        quote=Quote("market-1", Side.BUY, Decimal("0.50"), Decimal("3")),
+        created_at=0,
+    )
+    engine.open_orders[maker_order.order_id] = maker_order
+
+    asyncio.run(
+        handle_fill_and_wait(
+            engine,
+            WalletFillEvent(order_id="maker-order", filled_size=Decimal("2")),
+        )
+    )
+
+    quote, post_only = client.created[0]
+    assert quote.side == Side.SELL
+    assert quote.price == Decimal("0.001")
     assert post_only is False
 
 

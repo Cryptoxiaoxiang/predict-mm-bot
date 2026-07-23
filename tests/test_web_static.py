@@ -36,3 +36,4 @@ def test_run_duration_controls_and_dashboard_countdown_are_present() -> None:
     assert "run_expires_at" in javascript
     assert "runDurationEnabled.checked = true" in javascript
     assert "runDurationHours.disabled" not in javascript
+    assert "市场 tick 为 0.001 时使用 0.001" in html

@@ -101,7 +101,7 @@
                   <select name="run_duration_minutes" aria-label="有效期分钟"></select>
                 </div>
               </div>
-              <label class="switch-row"><span><strong>买单被吃单后立即卖出</strong><small>包括 Yes 与 No；成交保护启用后会停止对应市场继续报价</small></span><span class="switch-control"><input type="checkbox" name="emergency_exit_on_buy_fill" checked /><i></i></span><span class="tooltip" tabindex="0">?<span class="tooltip-text" role="tooltip">实盘专用。买单被吃单（包括部分成交）时，机器人会撤掉该市场其他订单，并以 0.01 的非 post-only 限价卖单卖出已成交数量。这可能会造成损失。</span></span></label>
+              <label class="switch-row"><span><strong>买单被吃单后立即卖出</strong><small>包括 Yes 与 No；成交保护启用后会停止对应市场继续报价</small></span><span class="switch-control"><input type="checkbox" name="emergency_exit_on_buy_fill" checked /><i></i></span><span class="tooltip" tabindex="0">?<span class="tooltip-text" role="tooltip">实盘专用。买单被吃单（包括部分成交）时，机器人会撤掉该市场其他订单，并提交非 post-only 限价卖单。市场 tick 为 0.001 时使用 0.001，否则使用 0.01。这可能会造成损失。</span></span></label>
               <label class="switch-row"><span><strong>模拟运行</strong><small>开启后只计算报价和写入日志，不会创建真实订单</small></span><span class="switch-control"><input type="checkbox" name="dry_run" /><i></i></span></label>
               <div class="form-actions"><button class="btn primary" type="submit">保存挂单设置</button></div>
             </section>

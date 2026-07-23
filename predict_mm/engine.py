@@ -46,6 +46,7 @@ class MarketMakerEngine:
         self._prepared_emergency_markets: set[str] = set()
         self._submitted_fill_settlements: set[str] = set()
         self._handled_fill_settlements: set[str] = set()
+        self._market_tick_sizes: dict[str, Decimal] = {}
         self._degraded_fill_reconcile_interval_seconds = 0.5
         self._healthy_fill_reconcile_interval_seconds = max(
             2.0, self.config.poll_interval_seconds
@@ -234,6 +235,8 @@ class MarketMakerEngine:
                     error,
                 )
                 continue
+            if orderbook.tick_size is not None:
+                self._market_tick_sizes[market.id] = orderbook.tick_size
             if self.config.replace_on_orderbook_change:
                 await self._cancel_orders_approached_by_market(market.id, orderbook)
             quotes = self.strategy.build_quotes(market, orderbook)
@@ -565,10 +568,13 @@ class MarketMakerEngine:
 
     async def _emergency_exit(self, filled_order: ManagedOrder, fill_size: Decimal) -> None:
         market_id = filled_order.quote.market_id
+        exit_price = await self._emergency_exit_price(market_id)
         logger.critical(
-            "BUY order filled on %s; canceling market quotes and selling %s at emergency limit 0.01",
+            "BUY order filled on %s; canceling market quotes and selling %s "
+            "at emergency limit %s",
             market_id,
             fill_size,
+            exit_price,
         )
         await self._prepare_emergency_exit(filled_order)
 
@@ -580,7 +586,7 @@ class MarketMakerEngine:
                     replace(
                         filled_order.quote,
                         side=Side.SELL,
-                        price=Decimal("0.01"),
+                        price=exit_price,
                         size=fill_size,
                     ),
                     post_only=False,
@@ -619,11 +625,35 @@ class MarketMakerEngine:
             self.open_orders[exit_order.order_id] = exit_order
             self._remember_order(exit_order)
             logger.critical(
-                "Emergency 0.01 sell order submitted for market %s: %s",
+                "Emergency %s sell order submitted for market %s: %s",
+                exit_price,
                 market_id,
                 exit_order.order_id,
             )
             return
+
+    async def _emergency_exit_price(self, market_id: str) -> Decimal:
+        """Use the lowest aggressive limit supported by the current market tick."""
+        fallback = Decimal("0.01")
+        tick_size = self._market_tick_sizes.get(market_id)
+        if tick_size is not None:
+            return Decimal("0.001") if tick_size <= Decimal("0.001") else fallback
+        try:
+            orderbook = await self.client.get_orderbook(market_id)
+        except Exception as error:  # noqa: BLE001
+            logger.warning(
+                "Unable to read tick size for emergency exit on %s; using %s: %s",
+                market_id,
+                fallback,
+                error,
+            )
+            return fallback
+        tick_size = orderbook.tick_size
+        if tick_size is not None:
+            self._market_tick_sizes[market_id] = tick_size
+        if tick_size is not None and tick_size <= Decimal("0.001"):
+            return Decimal("0.001")
+        return fallback
 
     async def _cancel_all_known_markets(self) -> None:
         # Predict's remove endpoint only hides orders from the public book. Use

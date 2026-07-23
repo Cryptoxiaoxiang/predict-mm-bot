@@ -19,6 +19,19 @@ def test_headers_match_predict_docs() -> None:
     assert client._headers()["Authorization"] == "Bearer jwt"
 
 
+def test_custom_outcome_labels_map_to_canonical_orderbook_sides() -> None:
+    client = PredictClient(Settings(), dry_run=False)
+    client._market_metadata["818058"] = {
+        "outcomes": [
+            {"name": "GXP", "indexSet": 1},
+            {"name": "HRTS", "indexSet": 2},
+        ]
+    }
+
+    assert client.cached_outcome_side("818058", "GXP") == "YES"
+    assert client.cached_outcome_side("818058", "HRTS") == "NO"
+
+
 def test_rest_request_matches_official_requests_usage() -> None:
     client = PredictClient(Settings(api_key="api-key"), dry_run=False)
     response = Mock(status_code=200, content=b'{"data":{"message":"hello"}}')

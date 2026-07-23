@@ -665,6 +665,38 @@ def test_approached_no_buy_uses_complementary_yes_ask() -> None:
     assert client.cancelled == ["old-no-buy"]
 
 
+def test_approached_custom_no_buy_uses_canonical_outcome_side() -> None:
+    client = RepriceClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[MarketConfig(id="818058", outcome="HRTS")]),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+    engine.open_orders["old-hrts-buy"] = ManagedOrder(
+        order_id="old-hrts-buy",
+        quote=Quote(
+            "818058",
+            Side.BUY,
+            Decimal("0.93"),
+            Decimal("100"),
+            "HRTS",
+            outcome_side="NO",
+        ),
+        created_at=monotonic(),
+    )
+    book = OrderBook(
+        market_id="818058",
+        bids=[Level(Decimal("0.02"), Decimal("100"))],
+        asks=[Level(Decimal("0.06"), Decimal("100"))],
+        tick_size=Decimal("0.01"),
+    )
+
+    asyncio.run(engine._cancel_orders_approached_by_market("818058", book))
+
+    assert client.cancelled == ["old-hrts-buy"]
+
+
 def test_temporary_cancel_failure_keeps_engine_running_and_order_open(caplog) -> None:
     class FailingCancelClient(RepriceClient):
         async def cancel_order(self, order_id: str) -> None:

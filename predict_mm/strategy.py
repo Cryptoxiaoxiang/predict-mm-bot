@@ -10,7 +10,13 @@ class PassiveMakerStrategy:
     def __init__(self, config: StrategyConfig) -> None:
         self.config = config
 
-    def build_quotes(self, market: MarketConfig, orderbook: OrderBook) -> list[Quote]:
+    def build_quotes(
+        self,
+        market: MarketConfig,
+        orderbook: OrderBook,
+        *,
+        outcome_side: str | None = None,
+    ) -> list[Quote]:
         best_bid = orderbook.best_bid
         best_ask = orderbook.best_ask
         spread = orderbook.spread
@@ -43,12 +49,9 @@ class PassiveMakerStrategy:
         # the backend cannot represent.
         no_bid = quantize_price(Decimal("1") - ask, tick_size, Side.BUY)
 
-        if bid <= Decimal("0") or ask >= Decimal("1") or bid >= ask:
-            return []
-
         quote_size = market.quote_size or self.config.quote_size
 
-        def buy(outcome: str, price: Decimal) -> Quote:
+        def buy(outcome: str, price: Decimal, canonical_side: str) -> Quote:
             return Quote(
                 market_id=market.id,
                 side=Side.BUY,
@@ -59,11 +62,26 @@ class PassiveMakerStrategy:
                 fee_rate_bps=market.fee_rate_bps,
                 is_neg_risk=market.is_neg_risk,
                 is_yield_bearing=market.is_yield_bearing,
+                outcome_side=canonical_side,
             )
 
-        selected = market.outcome.strip().upper()
+        selected = (outcome_side or market.outcome).strip().upper()
+        yes_quote_is_safe = (
+            bid > Decimal("0")
+            and ask < Decimal("1")
+            and bid < ask
+        )
+        no_quote_is_safe = Decimal("0") < no_bid < Decimal("1")
         if selected in {"YES_NO", "YES&NO", "YES AND NO"}:
-            return [buy("Yes", bid), buy("No", no_bid)]
+            if not yes_quote_is_safe or not no_quote_is_safe:
+                return []
+            return [buy("Yes", bid, "YES"), buy("No", no_bid, "NO")]
         if selected == "NO":
-            return [buy(market.outcome, no_bid)]
-        return [buy(market.outcome, bid)]
+            if not no_quote_is_safe:
+                return []
+            return [buy(market.outcome, no_bid, "NO")]
+        if selected == "YES":
+            if not yes_quote_is_safe:
+                return []
+            return [buy(market.outcome, bid, "YES")]
+        return []

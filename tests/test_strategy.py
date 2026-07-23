@@ -62,6 +62,28 @@ def test_strategy_complements_yes_ask_for_no_quote() -> None:
     ]
 
 
+def test_strategy_uses_complement_for_custom_no_label() -> None:
+    strategy = PassiveMakerStrategy(
+        StrategyConfig(tick_size=Decimal("0.001"), quote_size=Decimal("1"), min_edge_ticks=2)
+    )
+    book = OrderBook(
+        market_id="818058",
+        bids=[Level(Decimal("0.02"), Decimal("100"))],
+        asks=[Level(Decimal("0.05"), Decimal("100"))],
+        tick_size=Decimal("0.01"),
+    )
+
+    quotes = strategy.build_quotes(
+        MarketConfig(id="818058", outcome="HRTS"),
+        book,
+        outcome_side="NO",
+    )
+
+    assert [(quote.outcome, quote.outcome_side, quote.price) for quote in quotes] == [
+        ("HRTS", "NO", Decimal("0.93")),
+    ]
+
+
 def test_strategy_accepts_one_tick_spread_when_quote_stays_away() -> None:
     strategy = PassiveMakerStrategy(StrategyConfig(min_spread_to_quote=Decimal("0.006")))
     book = OrderBook(

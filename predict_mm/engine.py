@@ -239,7 +239,23 @@ class MarketMakerEngine:
                 self._market_tick_sizes[market.id] = orderbook.tick_size
             if self.config.replace_on_orderbook_change:
                 await self._cancel_orders_approached_by_market(market.id, orderbook)
-            quotes = self.strategy.build_quotes(market, orderbook)
+            outcome_side = None
+            resolve_outcome_side = getattr(self.client, "cached_outcome_side", None)
+            if callable(resolve_outcome_side):
+                outcome_side = resolve_outcome_side(market.id, market.outcome)
+                if outcome_side is None:
+                    logger.warning(
+                        "Unable to map outcome %s on %s to Predict's YES/NO orderbook; "
+                        "skipping this market for safety",
+                        market.outcome,
+                        market.id,
+                    )
+                    continue
+            quotes = self.strategy.build_quotes(
+                market,
+                orderbook,
+                outcome_side=outcome_side,
+            )
             if not quotes:
                 logger.info("No safe quote for %s", market.id)
                 continue
@@ -389,7 +405,10 @@ class MarketMakerEngine:
             ):
                 continue
 
-            if order.quote.side == Side.BUY and order.quote.outcome.strip().upper() == "NO":
+            canonical_outcome = (
+                order.quote.outcome_side or order.quote.outcome
+            ).strip().upper()
+            if order.quote.side == Side.BUY and canonical_outcome == "NO":
                 # Predict publishes only the YES book.  The current NO bid is
                 # the complement of the best YES ask.
                 if orderbook.best_ask is None:

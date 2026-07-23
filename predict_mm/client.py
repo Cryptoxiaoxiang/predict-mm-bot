@@ -503,6 +503,7 @@ class PredictClient:
                             fee_rate_bps=quote_data.get("fee_rate_bps"),
                             is_neg_risk=quote_data.get("is_neg_risk"),
                             is_yield_bearing=quote_data.get("is_yield_bearing"),
+                            outcome_side=quote_data.get("outcome_side") or None,
                         ),
                         created_at=monotonic(),
                         status=OrderStatus(str(record.get("status") or "unknown")),
@@ -543,6 +544,7 @@ class PredictClient:
                 "fee_rate_bps": order.quote.fee_rate_bps,
                 "is_neg_risk": order.quote.is_neg_risk,
                 "is_yield_bearing": order.quote.is_yield_bearing,
+                "outcome_side": order.quote.outcome_side,
             },
         }
         records = list(existing.values())[-500:]
@@ -849,6 +851,50 @@ class PredictClient:
             if value:
                 return value
         return ""
+
+    def cached_outcome_side(self, market_id: str, outcome_name: str) -> str | None:
+        """Map a user-facing outcome label to Predict's canonical YES/NO book side.
+
+        Sports markets often replace the visible labels with team abbreviations.
+        Predict still exposes one YES-denominated orderbook: CTF indexSet 1 is
+        the YES outcome and indexSet 2 is the complementary NO outcome.
+        """
+        wanted = outcome_name.strip().casefold()
+        canonical = outcome_name.strip().upper()
+        if canonical in {"YES", "NO"}:
+            return canonical
+        if canonical in {"YES_NO", "YES&NO", "YES AND NO"}:
+            return "YES_NO"
+
+        market = self._market_metadata.get(market_id) or {}
+        for outcome in market.get("outcomes") or []:
+            if not isinstance(outcome, dict):
+                continue
+            names = {
+                str(outcome.get(key, "")).strip().casefold()
+                for key in ("name", "outcome", "side", "title")
+                if outcome.get(key) not in (None, "")
+            }
+            if not wanted or wanted not in names:
+                continue
+
+            explicit_side = str(
+                outcome.get("side") or outcome.get("outcome") or ""
+            ).strip().upper()
+            if explicit_side in {"YES", "NO"}:
+                return explicit_side
+
+            raw_index_set = self._first_present(outcome, "indexSet", "index_set")
+            try:
+                index_set = int(str(raw_index_set))
+            except (TypeError, ValueError):
+                return None
+            if index_set == 1:
+                return "YES"
+            if index_set == 2:
+                return "NO"
+            return None
+        return None
 
     def _tick_size_from_market(self, market: dict, market_id: str) -> Decimal:
         raw_precision = self._first_present(market, "decimalPrecision", "decimal_precision")

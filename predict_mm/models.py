@@ -58,6 +58,7 @@ class Quote:
     fee_rate_bps: int | None = None
     is_neg_risk: bool | None = None
     is_yield_bearing: bool | None = None
+    outcome_side: str | None = None
 
 
 @dataclass

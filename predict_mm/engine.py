@@ -314,24 +314,24 @@ class MarketMakerEngine:
             if not order.is_emergency_exit and order.quote.market_id in configured_by_id
         }
 
-        active_order = [market.id for market in enabled if market.id in active_ids]
-        self._sync_market_queue(self._active_market_queue, active_order)
+        normal_order = [market.id for market in enabled if market.id not in active_ids]
+        self._sync_market_queue(self._normal_market_queue, normal_order)
         selected_ids = self._take_market_ids(
-            self._active_market_queue,
+            self._normal_market_queue,
             self.MARKET_BATCH_SIZE,
+            eligible=lambda market_id: (
+                self._no_safe_quote_until.get(market_id, 0) <= now
+            ),
         )
 
         remaining = self.MARKET_BATCH_SIZE - len(selected_ids)
         if remaining:
-            normal_order = [market.id for market in enabled if market.id not in active_ids]
-            self._sync_market_queue(self._normal_market_queue, normal_order)
+            active_order = [market.id for market in enabled if market.id in active_ids]
+            self._sync_market_queue(self._active_market_queue, active_order)
             selected_ids.extend(
                 self._take_market_ids(
-                    self._normal_market_queue,
+                    self._active_market_queue,
                     remaining,
-                    eligible=lambda market_id: (
-                        self._no_safe_quote_until.get(market_id, 0) <= now
-                    ),
                 )
             )
 
@@ -798,7 +798,7 @@ class MarketMakerEngine:
     async def _cancel_all_known_markets(self) -> None:
         # Predict's remove endpoint only hides orders from the public book. Use
         # one account-wide removal so stale orders from deleted market configs
-        # cannot remain visible. New signatures also expire after 120 seconds.
+        # cannot remain visible. New signatures also expire after 300 seconds.
         await self.client.cancel_all_orders(None)
         for order in self.open_orders.values():
             order.status = OrderStatus.CANCELED
@@ -816,7 +816,7 @@ class MarketMakerEngine:
                 if attempt == 5:
                     logger.critical(
                         "Unable to cancel all orders during shutdown after %s attempts; "
-                        "orders still expire after 120 seconds: %s",
+                        "orders still expire after 300 seconds: %s",
                         attempt,
                         error,
                     )

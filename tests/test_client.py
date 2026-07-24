@@ -1,6 +1,7 @@
 from decimal import Decimal
 import asyncio
 import json
+from time import time
 from unittest.mock import AsyncMock, Mock, patch
 
 from predict_mm.client import (
@@ -464,6 +465,8 @@ def test_limit_order_uses_wei_price_in_rest_payload() -> None:
     assert "reservedBalancePolicy" not in payload["data"]
     assert payload["data"]["order"]["makerAmount"] == "24900000000000000000"
     assert payload["data"]["order"]["takerAmount"] == "100000000000000000000"
+    expires_in = int(payload["data"]["order"]["expiration"]) - int(time())
+    assert 295 <= expires_in <= 300
 
 
 def test_quote_metadata_can_be_completed_from_market_response() -> None:

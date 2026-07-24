@@ -494,7 +494,7 @@ def test_market_batches_are_limited_to_twenty_and_rotate() -> None:
     }
 
 
-def test_markets_with_open_orders_are_scheduled_first() -> None:
+def test_markets_without_open_orders_are_scheduled_first() -> None:
     markets = [MarketConfig(id=f"market-{index}") for index in range(25)]
     engine = MarketMakerEngine(
         config=BotConfig(markets=markets),
@@ -510,8 +510,39 @@ def test_markets_with_open_orders_are_scheduled_first() -> None:
 
     batch = engine._next_market_batch(now=0)
 
-    assert batch[0].id == "market-24"
+    assert [market.id for market in batch] == [
+        f"market-{index}" for index in range(20)
+    ]
+    assert "market-24" not in {market.id for market in batch}
     assert len(batch) == 20
+
+
+def test_open_order_markets_fill_remaining_batch_capacity() -> None:
+    markets = [MarketConfig(id=f"market-{index}") for index in range(25)]
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=markets),
+        client=RepriceClient(),  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+    for index in range(6):
+        engine.open_orders[f"working-{index}"] = ManagedOrder(
+            order_id=f"working-{index}",
+            quote=Quote(
+                f"market-{index}",
+                Side.BUY,
+                Decimal("0.40"),
+                Decimal("1"),
+            ),
+            created_at=monotonic(),
+        )
+
+    batch = engine._next_market_batch(now=0)
+
+    assert [market.id for market in batch[:19]] == [
+        f"market-{index}" for index in range(6, 25)
+    ]
+    assert batch[19].id == "market-0"
 
 
 def test_no_safe_quote_markets_are_temporarily_backed_off() -> None:

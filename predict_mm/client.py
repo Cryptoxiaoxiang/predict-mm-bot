@@ -965,7 +965,7 @@ class PredictClient:
                 # Removing an order from Predict's public orderbook does not
                 # invalidate its signature on-chain. A short hard expiry bounds
                 # that residual risk even if the process or network disappears.
-                expires_at=datetime.now(timezone.utc) + timedelta(seconds=120),
+                expires_at=datetime.now(timezone.utc) + timedelta(seconds=300),
             ),
         )
         typed_data = builder.build_typed_data(

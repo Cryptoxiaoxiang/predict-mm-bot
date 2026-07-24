@@ -112,6 +112,19 @@ def test_setup_accepts_non_binary_market_outcome() -> None:
     assert payload.markets[0].market_title == "France vs Spain · Match winner"
 
 
+def test_setup_accepts_more_than_fifty_markets() -> None:
+    payload = SetupPayload(
+        markets=[
+            MarketPayload(market_id=str(index))
+            for index in range(1, 101)
+        ]
+    )
+
+    _validate_setup(payload)
+
+    assert len(payload.markets) == 100
+
+
 def test_setup_rejects_a_url_that_has_not_been_resolved() -> None:
     payload = SetupPayload(markets=[MarketPayload(market_id="https://predict.fun/market/example")])
     try:

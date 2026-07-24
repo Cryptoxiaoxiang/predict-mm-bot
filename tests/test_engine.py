@@ -469,6 +469,113 @@ class RepriceClient:
         return ManagedOrder(order_id=f"new-{len(self.created)}", quote=quote, created_at=monotonic())
 
 
+def test_market_batches_are_limited_to_twenty_and_rotate() -> None:
+    markets = [MarketConfig(id=f"market-{index}") for index in range(45)]
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=markets),
+        client=RepriceClient(),  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+
+    first = engine._next_market_batch(now=0)
+    second = engine._next_market_batch(now=0)
+    third = engine._next_market_batch(now=0)
+
+    assert len(first) == len(second) == len(third) == 20
+    assert [market.id for market in first] == [
+        f"market-{index}" for index in range(20)
+    ]
+    assert [market.id for market in second] == [
+        f"market-{index}" for index in range(20, 40)
+    ]
+    assert {market.id for market in first + second + third} == {
+        f"market-{index}" for index in range(45)
+    }
+
+
+def test_markets_with_open_orders_are_scheduled_first() -> None:
+    markets = [MarketConfig(id=f"market-{index}") for index in range(25)]
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=markets),
+        client=RepriceClient(),  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+    engine.open_orders["working"] = ManagedOrder(
+        order_id="working",
+        quote=Quote("market-24", Side.BUY, Decimal("0.40"), Decimal("1")),
+        created_at=monotonic(),
+    )
+
+    batch = engine._next_market_batch(now=0)
+
+    assert batch[0].id == "market-24"
+    assert len(batch) == 20
+
+
+def test_no_safe_quote_markets_are_temporarily_backed_off() -> None:
+    class EmptyBookClient(RepriceClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.requested: list[str] = []
+
+        async def get_orderbook(self, market_id: str) -> OrderBook:
+            self.requested.append(market_id)
+            return OrderBook(market_id=market_id, bids=[], asks=[])
+
+    client = EmptyBookClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(
+            dry_run=True,
+            markets=[MarketConfig(id=f"market-{index}") for index in range(25)],
+        ),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+
+    async def exercise() -> None:
+        await engine._tick()
+        await engine._tick()
+        await engine._tick()
+
+    asyncio.run(exercise())
+
+    assert len(client.requested) == 25
+    assert len(set(client.requested)) == 25
+
+
+def test_orderbook_fetch_concurrency_is_limited_to_five() -> None:
+    class ConcurrentBookClient(RepriceClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.in_flight = 0
+            self.max_in_flight = 0
+
+        async def get_orderbook(self, market_id: str) -> OrderBook:
+            self.in_flight += 1
+            self.max_in_flight = max(self.max_in_flight, self.in_flight)
+            await asyncio.sleep(0)
+            self.in_flight -= 1
+            return await super().get_orderbook(market_id)
+
+    client = ConcurrentBookClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(
+            markets=[MarketConfig(id=f"market-{index}") for index in range(20)]
+        ),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+
+    results = asyncio.run(engine._fetch_orderbooks(engine.config.enabled_markets))
+
+    assert len(results) == 20
+    assert client.max_in_flight == 5
+
+
 def test_tick_only_adds_the_missing_dual_outcome_quote() -> None:
     client = RepriceClient()
     engine = MarketMakerEngine(

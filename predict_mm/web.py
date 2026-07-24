@@ -39,7 +39,7 @@ class MarketPayload(BaseModel):
 class SetupPayload(BaseModel):
     dry_run: bool = False
     emergency_exit_on_buy_fill: bool = True
-    markets: list[MarketPayload] = Field(min_length=1, max_length=50)
+    markets: list[MarketPayload] = Field(min_length=1, max_length=200)
     cancel_after_seconds: str = "8"
     run_duration_enabled: bool = False
     run_duration_hours: int = Field(default=0, ge=0, le=72)

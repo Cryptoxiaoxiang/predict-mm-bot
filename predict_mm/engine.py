@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+from collections import deque
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -10,7 +12,7 @@ from decimal import Decimal
 from time import monotonic
 
 from predict_mm.client import PredictClient
-from predict_mm.config import BotConfig
+from predict_mm.config import BotConfig, MarketConfig
 from predict_mm.models import (
     ManagedOrder,
     OrderBook,
@@ -26,6 +28,11 @@ logger = logging.getLogger("predict-mm")
 
 
 class MarketMakerEngine:
+    MARKET_BATCH_SIZE = 20
+    MARKET_BATCH_INTERVAL_SECONDS = 1.0
+    MARKET_FETCH_CONCURRENCY = 5
+    NO_SAFE_QUOTE_BACKOFF_SECONDS = 15.0
+
     def __init__(
         self,
         config: BotConfig,
@@ -47,6 +54,11 @@ class MarketMakerEngine:
         self._submitted_fill_settlements: set[str] = set()
         self._handled_fill_settlements: set[str] = set()
         self._market_tick_sizes: dict[str, Decimal] = {}
+        self._active_market_queue: deque[str] = deque()
+        self._normal_market_queue: deque[str] = deque(
+            market.id for market in self.config.enabled_markets
+        )
+        self._no_safe_quote_until: dict[str, float] = {}
         self._degraded_fill_reconcile_interval_seconds = 0.5
         self._healthy_fill_reconcile_interval_seconds = max(
             2.0, self.config.poll_interval_seconds
@@ -156,7 +168,7 @@ class MarketMakerEngine:
                     )
                 if monotonic() >= next_quote_at:
                     await self._tick()
-                    next_quote_at = monotonic() + self.config.poll_interval_seconds
+                    next_quote_at = monotonic() + self.MARKET_BATCH_INTERVAL_SECONDS
                 next_deadline = min(next_quote_at, next_fill_reconcile_at)
                 if self._run_deadline is not None:
                     next_deadline = min(next_deadline, self._run_deadline)
@@ -214,6 +226,9 @@ class MarketMakerEngine:
     async def _tick(self) -> None:
         await self._reconcile_order_statuses()
         await self._cancel_stale_orders()
+        markets = self._next_market_batch()
+        if not markets:
+            return
         try:
             positions = await self.client.get_positions()
         except Exception as error:  # noqa: BLE001
@@ -223,17 +238,8 @@ class MarketMakerEngine:
             )
             return
 
-        for market in self.config.enabled_markets:
-            if market.id in self._halted_markets:
-                continue
-            try:
-                orderbook = await self.client.get_orderbook(market.id)
-            except Exception as error:  # noqa: BLE001
-                logger.warning(
-                    "Unable to read orderbook for %s; skipping this market for this cycle: %s",
-                    market.id,
-                    error,
-                )
+        for market, orderbook in await self._fetch_orderbooks(markets):
+            if orderbook is None:
                 continue
             if orderbook.tick_size is not None:
                 self._market_tick_sizes[market.id] = orderbook.tick_size
@@ -258,7 +264,11 @@ class MarketMakerEngine:
             )
             if not quotes:
                 logger.info("No safe quote for %s", market.id)
+                self._no_safe_quote_until[market.id] = (
+                    monotonic() + self.NO_SAFE_QUOTE_BACKOFF_SECONDS
+                )
                 continue
+            self._no_safe_quote_until.pop(market.id, None)
 
             active = self._working_orders()
             missing_quotes = [
@@ -297,6 +307,92 @@ class MarketMakerEngine:
                 self.open_orders[order.order_id] = order
                 self._remember_order(order)
         await self._reconcile_order_statuses()
+
+    def _next_market_batch(self, *, now: float | None = None) -> list[MarketConfig]:
+        now = monotonic() if now is None else now
+        enabled = [
+            market
+            for market in self.config.enabled_markets
+            if market.id not in self._halted_markets
+        ]
+        configured_by_id = {market.id: market for market in enabled}
+        active_ids = {
+            order.quote.market_id
+            for order in self._working_orders()
+            if not order.is_emergency_exit and order.quote.market_id in configured_by_id
+        }
+
+        active_order = [market.id for market in enabled if market.id in active_ids]
+        self._sync_market_queue(self._active_market_queue, active_order)
+        selected_ids = self._take_market_ids(
+            self._active_market_queue,
+            self.MARKET_BATCH_SIZE,
+        )
+
+        remaining = self.MARKET_BATCH_SIZE - len(selected_ids)
+        if remaining:
+            normal_order = [market.id for market in enabled if market.id not in active_ids]
+            self._sync_market_queue(self._normal_market_queue, normal_order)
+            selected_ids.extend(
+                self._take_market_ids(
+                    self._normal_market_queue,
+                    remaining,
+                    eligible=lambda market_id: (
+                        self._no_safe_quote_until.get(market_id, 0) <= now
+                    ),
+                )
+            )
+
+        return [configured_by_id[market_id] for market_id in selected_ids]
+
+    @staticmethod
+    def _sync_market_queue(queue: deque[str], ordered_ids: list[str]) -> None:
+        allowed = set(ordered_ids)
+        retained = [market_id for market_id in queue if market_id in allowed]
+        seen = set(retained)
+        retained.extend(market_id for market_id in ordered_ids if market_id not in seen)
+        queue.clear()
+        queue.extend(retained)
+
+    @staticmethod
+    def _take_market_ids(
+        queue: deque[str],
+        limit: int,
+        *,
+        eligible: Callable[[str], bool] | None = None,
+    ) -> list[str]:
+        if limit <= 0 or not queue:
+            return []
+        is_eligible = eligible or (lambda _market_id: True)
+        selected: list[str] = []
+        for _ in range(len(queue)):
+            market_id = queue.popleft()
+            queue.append(market_id)
+            if is_eligible(market_id):
+                selected.append(market_id)
+                if len(selected) >= limit:
+                    break
+        return selected
+
+    async def _fetch_orderbooks(
+        self,
+        markets: list[MarketConfig],
+    ) -> list[tuple[MarketConfig, OrderBook | None]]:
+        semaphore = asyncio.Semaphore(self.MARKET_FETCH_CONCURRENCY)
+
+        async def fetch(market: MarketConfig) -> tuple[MarketConfig, OrderBook | None]:
+            async with semaphore:
+                try:
+                    return market, await self.client.get_orderbook(market.id)
+                except Exception as error:  # noqa: BLE001
+                    logger.warning(
+                        "Unable to read orderbook for %s; skipping this market for this cycle: %s",
+                        market.id,
+                        error,
+                    )
+                    return market, None
+
+        return list(await asyncio.gather(*(fetch(market) for market in markets)))
 
     def _working_orders(self) -> list[ManagedOrder]:
         return [

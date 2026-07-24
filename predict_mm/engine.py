@@ -17,6 +17,7 @@ from predict_mm.models import (
     ManagedOrder,
     OrderBook,
     OrderStatus,
+    Quote,
     Side,
     WalletFillEvent,
     WalletOrderStatusEvent,
@@ -31,6 +32,7 @@ class MarketMakerEngine:
     MARKET_BATCH_SIZE = 20
     MARKET_BATCH_INTERVAL_SECONDS = 1.0
     MARKET_FETCH_CONCURRENCY = 5
+    ORDER_SUBMIT_CONCURRENCY = 5
     NO_SAFE_QUOTE_BACKOFF_SECONDS = 15.0
 
     def __init__(
@@ -238,6 +240,8 @@ class MarketMakerEngine:
             )
             return
 
+        quotes_to_submit: list[Quote] = []
+        reserved_orders: list[ManagedOrder] = []
         for market, orderbook in await self._fetch_orderbooks(markets):
             if orderbook is None:
                 continue
@@ -270,7 +274,7 @@ class MarketMakerEngine:
                 continue
             self._no_safe_quote_until.pop(market.id, None)
 
-            active = self._working_orders()
+            active = self._working_orders() + reserved_orders
             missing_quotes = [
                 quote
                 for quote in quotes
@@ -284,28 +288,16 @@ class MarketMakerEngine:
             ]
             approved = self.risk.filter_quotes(missing_quotes, active, positions)
             for quote in approved:
-                try:
-                    order = await self.client.create_order(quote)
-                except Exception as error:  # noqa: BLE001
-                    # A rejected passive quote must not bring down the wallet
-                    # event stream. In particular, available collateral can
-                    # change between risk evaluation and API submission while a
-                    # different order is settling. Keeping the engine alive is
-                    # essential so a later settlement-success event can still
-                    # trigger the emergency exit.
-                    logger.warning(
-                        "Create quote failed on %s (%s %s %s @ %s); "
-                        "skipping this quote and keeping the bot running: %s",
-                        quote.market_id,
-                        quote.side.value,
-                        quote.size,
-                        quote.outcome,
-                        quote.price,
-                        error,
+                quotes_to_submit.append(quote)
+                reserved_orders.append(
+                    ManagedOrder(
+                        order_id=f"reserved:{len(reserved_orders)}",
+                        quote=quote,
+                        created_at=monotonic(),
+                        status=OrderStatus.PENDING,
                     )
-                    continue
-                self.open_orders[order.order_id] = order
-                self._remember_order(order)
+                )
+        await self._submit_quotes(quotes_to_submit)
         await self._reconcile_order_statuses()
 
     def _next_market_batch(self, *, now: float | None = None) -> list[MarketConfig]:
@@ -393,6 +385,39 @@ class MarketMakerEngine:
                     return market, None
 
         return list(await asyncio.gather(*(fetch(market) for market in markets)))
+
+    async def _submit_quotes(self, quotes: list[Quote]) -> None:
+        semaphore = asyncio.Semaphore(self.ORDER_SUBMIT_CONCURRENCY)
+
+        async def submit(quote: Quote) -> ManagedOrder | None:
+            async with semaphore:
+                try:
+                    return await self.client.create_order(quote)
+                except Exception as error:  # noqa: BLE001
+                    # A rejected passive quote must not bring down the wallet
+                    # event stream. In particular, available collateral can
+                    # change between risk evaluation and API submission while a
+                    # different order is settling. Keeping the engine alive is
+                    # essential so a later settlement-success event can still
+                    # trigger the emergency exit.
+                    logger.warning(
+                        "Create quote failed on %s (%s %s %s @ %s); "
+                        "skipping this quote and keeping the bot running: %s",
+                        quote.market_id,
+                        quote.side.value,
+                        quote.size,
+                        quote.outcome,
+                        quote.price,
+                        error,
+                    )
+                    return None
+
+        submitted = await asyncio.gather(*(submit(quote) for quote in quotes))
+        for order in submitted:
+            if order is None:
+                continue
+            self.open_orders[order.order_id] = order
+            self._remember_order(order)
 
     def _working_orders(self) -> list[ManagedOrder]:
         return [

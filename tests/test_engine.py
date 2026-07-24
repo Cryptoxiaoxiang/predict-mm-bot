@@ -576,6 +576,69 @@ def test_orderbook_fetch_concurrency_is_limited_to_five() -> None:
     assert client.max_in_flight == 5
 
 
+def test_order_submission_concurrency_is_limited_to_five() -> None:
+    class ConcurrentSubmitClient(RepriceClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.in_flight = 0
+            self.max_in_flight = 0
+
+        async def create_order(
+            self,
+            quote: Quote,
+            *,
+            post_only: bool = True,
+        ) -> ManagedOrder:
+            self.in_flight += 1
+            self.max_in_flight = max(self.max_in_flight, self.in_flight)
+            await asyncio.sleep(0.001)
+            self.in_flight -= 1
+            return await super().create_order(quote, post_only=post_only)
+
+    client = ConcurrentSubmitClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(
+            dry_run=True,
+            markets=[MarketConfig(id=f"market-{index}") for index in range(20)],
+        ),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(
+            RiskConfig(
+                max_order_size=Decimal("1"),
+                max_position_per_market=Decimal("1"),
+                max_total_position=Decimal("20"),
+            )
+        ),
+    )
+
+    asyncio.run(engine._tick())
+
+    assert len(client.created) == 20
+    assert client.max_in_flight == 5
+    assert len(engine.open_orders) == 20
+
+
+def test_concurrent_submission_reservation_prevents_duplicate_quote() -> None:
+    client = RepriceClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(
+            dry_run=True,
+            markets=[
+                MarketConfig(id="market-1"),
+                MarketConfig(id="market-1"),
+            ],
+        ),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+
+    asyncio.run(engine._tick())
+
+    assert len(client.created) == 1
+
+
 def test_tick_only_adds_the_missing_dual_outcome_quote() -> None:
     client = RepriceClient()
     engine = MarketMakerEngine(

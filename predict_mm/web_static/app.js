@@ -127,8 +127,63 @@ async function request(path, options = {}) {
     if (!response.ok) throw new Error(`服务器错误（${response.status}），请查看运行日志。`);
     throw new Error('服务器返回了无法识别的数据。');
   }
-  if (!response.ok) throw new Error(data.detail || `操作失败（${response.status}），请查看日志。`);
+  if (!response.ok) {
+    throw new Error(formatErrorDetail(data.detail) || `操作失败（${response.status}），请查看日志。`);
+  }
   return data;
+}
+
+const validationFieldLabels = {
+  market_id: '市场网址 / Market ID',
+  market_title: '市场名称',
+  outcome: '挂单选项',
+  quote_size: '单次挂单数量',
+  markets: '做市市场',
+  cancel_after_seconds: '撤单等待秒数',
+  run_duration_hours: '有效期小时',
+  run_duration_minutes: '有效期分钟',
+  max_position_per_market: '单市场最大仓位',
+  max_total_position: '总最大仓位',
+};
+
+function validationPath(location = []) {
+  return location
+    .filter((part) => part !== 'body' && part !== 'markets')
+    .map((part) => {
+      if (typeof part === 'number') return `市场 ${part + 1}`;
+      return validationFieldLabels[part] || String(part);
+    })
+    .join(' → ');
+}
+
+function formatValidationItem(item) {
+  if (typeof item === 'string') return item;
+  if (!item || typeof item !== 'object') return String(item || '');
+  const path = validationPath(Array.isArray(item.loc) ? item.loc : []);
+  const translatedMessages = {
+    missing: '不能为空',
+    string_too_short: '不能为空',
+    string_too_long: '内容过长',
+    int_parsing: '必须是整数',
+    int_type: '必须是整数',
+    greater_than_equal: '数值低于允许范围',
+    less_than_equal: '数值超过允许范围',
+    too_long: '添加的市场数量超过上限',
+    too_short: '请至少添加一个市场',
+  };
+  const message = translatedMessages[item.type]
+    || item.msg
+    || item.message
+    || item.error
+    || JSON.stringify(item);
+  return path ? `${path}：${message}` : message;
+}
+
+function formatErrorDetail(detail) {
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) return detail.map(formatValidationItem).filter(Boolean).join('；');
+  if (detail && typeof detail === 'object') return formatValidationItem(detail);
+  return '';
 }
 
 function setField(name, value, target = form) {

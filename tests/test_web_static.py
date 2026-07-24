@@ -37,3 +37,14 @@ def test_run_duration_controls_and_dashboard_countdown_are_present() -> None:
     assert "runDurationEnabled.checked = true" in javascript
     assert "runDurationHours.disabled" not in javascript
     assert "市场 tick 为 0.001 时使用 0.001" in html
+
+
+def test_structured_api_errors_are_rendered_as_readable_messages() -> None:
+    javascript = (
+        Path(__file__).parents[1] / "predict_mm" / "web_static" / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "formatErrorDetail(data.detail)" in javascript
+    assert "function formatValidationItem" in javascript
+    assert "市场网址 / Market ID" in javascript
+    assert "new Error(data.detail" not in javascript

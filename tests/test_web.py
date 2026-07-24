@@ -122,6 +122,23 @@ def test_setup_rejects_a_url_that_has_not_been_resolved() -> None:
         raise AssertionError("expected unresolved market URL to fail")
 
 
+def test_setup_explains_which_market_has_not_been_resolved() -> None:
+    payload = SetupPayload(
+        markets=[
+            MarketPayload(market_id="42"),
+            MarketPayload(market_id=""),
+        ]
+    )
+
+    try:
+        _validate_setup(payload)
+    except Exception as error:
+        assert "市场 2" in str(error.detail)
+        assert "识别网址" in str(error.detail)
+    else:
+        raise AssertionError("expected empty market ID to fail")
+
+
 def test_setup_rejects_enabled_zero_run_duration() -> None:
     payload = SetupPayload(
         markets=[MarketPayload(market_id="42")],

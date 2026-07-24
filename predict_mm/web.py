@@ -30,9 +30,9 @@ STATIC_DIR = BASE_DIR / "web_static"
 
 
 class MarketPayload(BaseModel):
-    market_id: str = Field(min_length=1, max_length=200)
+    market_id: str = Field(max_length=200)
     market_title: str = Field(default="", max_length=500)
-    outcome: str = Field(default="YES", min_length=1, max_length=120)
+    outcome: str = Field(default="YES", max_length=120)
     quote_size: str = "1.0"
 
 
@@ -585,12 +585,31 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
 
 
 def _validate_setup(payload: SetupPayload) -> None:
-    for market in payload.markets:
+    for index, market in enumerate(payload.markets, start=1):
+        if not market.market_id.strip():
+            raise HTTPException(
+                status_code=422,
+                detail=f"市场 {index} 尚未识别。请粘贴市场网址并点击“识别网址”，选择选项后再保存。",
+            )
         if _is_predict_market_url(market.market_id):
             raise HTTPException(
                 status_code=422,
-                detail="请先点击“识别网址”并选择正确市场，再保存配置。",
+                detail=f"市场 {index} 仍是网址。请先点击“识别网址”并选择正确市场，再保存配置。",
             )
+        if not market.outcome.strip():
+            raise HTTPException(
+                status_code=422,
+                detail=f"市场 {index} 尚未选择挂单选项。",
+            )
+        try:
+            if Decimal(market.quote_size) <= 0:
+                raise ValueError
+        except (InvalidOperation, ValueError) as error:
+            raise HTTPException(
+                status_code=422,
+                detail=f"市场 {index} 的单次挂单数量必须是有效的正数。",
+            ) from error
+
     try:
         if payload.run_duration_enabled and (
             payload.run_duration_hours * 60 + payload.run_duration_minutes <= 0
@@ -599,18 +618,18 @@ def _validate_setup(payload: SetupPayload) -> None:
                 status_code=422,
                 detail="启用有效期时，小时和分钟不能同时为 0。",
             )
-        for value in (
-            payload.cancel_after_seconds,
-            payload.max_position_per_market,
-            payload.max_total_position,
+        for label, value in (
+            ("撤单等待秒数", payload.cancel_after_seconds),
+            ("单市场最大仓位", payload.max_position_per_market),
+            ("总最大仓位", payload.max_total_position),
         ):
             if Decimal(value) <= 0:
                 raise ValueError
-        for market in payload.markets:
-            if not market.market_id.strip() or not market.outcome.strip() or Decimal(market.quote_size) <= 0:
-                raise ValueError
     except (InvalidOperation, ValueError) as error:
-        raise HTTPException(status_code=422, detail="数量必须是有效的正数。") from error
+        raise HTTPException(
+            status_code=422,
+            detail=f"{label}必须是有效的正数。",
+        ) from error
 
 
 def _market_slug_from_url(value: str) -> str:

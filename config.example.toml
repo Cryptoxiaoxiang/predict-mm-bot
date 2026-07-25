@@ -1,6 +1,6 @@
 dry_run = false
 poll_interval_seconds = 2.0
-cancel_after_seconds = 8.0
+cancel_after_seconds = 60.0
 replace_on_orderbook_change = true
 cancel_all_on_start = true
 cancel_all_on_shutdown = true

@@ -71,7 +71,7 @@ class MarketConfig:
 class BotConfig:
     dry_run: bool = False
     poll_interval_seconds: float = 2
-    cancel_after_seconds: float = 8
+    cancel_after_seconds: float = 60
     run_duration_seconds: int = 0
     replace_on_orderbook_change: bool = True
     cancel_all_on_start: bool = True
@@ -94,7 +94,7 @@ def load_config(path: str | Path) -> BotConfig:
     config = BotConfig(
         dry_run=bool(raw.get("dry_run", False)),
         poll_interval_seconds=float(raw.get("poll_interval_seconds", 2)),
-        cancel_after_seconds=float(raw.get("cancel_after_seconds", 8)),
+        cancel_after_seconds=float(raw.get("cancel_after_seconds", 60)),
         run_duration_seconds=max(0, int(raw.get("run_duration_seconds", 0))),
         replace_on_orderbook_change=bool(raw.get("replace_on_orderbook_change", True)),
         cancel_all_on_start=bool(raw.get("cancel_all_on_start", True)),

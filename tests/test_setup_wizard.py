@@ -25,7 +25,7 @@ def test_build_config_text_defaults_to_live_trading() -> None:
     assert 'id = "123"' in text
     assert 'outcome = "YES"' in text
     assert 'quote_size = "1.0"' in text
-    assert "cancel_after_seconds = 8" in text
+    assert "cancel_after_seconds = 60" in text
     assert "is_neg_risk" not in text
     assert "is_yield_bearing" not in text
     assert "fee_rate_bps" not in text

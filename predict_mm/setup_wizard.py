@@ -19,7 +19,7 @@ class WizardAnswers:
     outcome: str = "YES"
     token_id: str = ""
     quote_size: str = "1.0"
-    cancel_after_seconds: str = "8"
+    cancel_after_seconds: str = "60"
     run_duration_seconds: int = 0
     max_position_per_market: str = "10.0"
     max_total_position: str = "50.0"
@@ -54,7 +54,7 @@ def run_setup_wizard(config_path: str | Path = "config.toml", env_path: str | Pa
         outcome=_ask_choice("交易 outcome", "YES", {"YES", "NO"}),
         token_id=_ask("Outcome token_id，实盘建议填写；留空则运行时尝试自动获取", ""),
         quote_size=_ask("单次挂单数量 quote_size", "1.0"),
-        cancel_after_seconds=_ask("订单多少秒后撤单", "8"),
+        cancel_after_seconds=_ask("挂单存活时间（秒）", "60"),
         max_position_per_market=_ask("单市场最大仓位", "10.0"),
         max_total_position=_ask("总最大仓位", "50.0"),
     )

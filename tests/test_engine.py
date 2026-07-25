@@ -904,24 +904,183 @@ def test_temporary_cancel_failure_keeps_engine_running_and_order_open(caplog) ->
             raise RuntimeError("HTTP 500: verify and cancel orders by id")
 
     client = FailingCancelClient()
+    market = MarketConfig(id="market-1")
+    strategy = PassiveMakerStrategy(StrategyConfig())
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="market-1")], cancel_after_seconds=0),
+        config=BotConfig(markets=[market], cancel_after_seconds=1),
         client=client,  # type: ignore[arg-type]
-        strategy=PassiveMakerStrategy(StrategyConfig()),
+        strategy=strategy,
         risk=RiskManager(RiskConfig()),
     )
+    book = asyncio.run(client.get_orderbook("market-1"))
+    target_quote = strategy.build_quotes(market, book)[0]
     order = ManagedOrder(
         order_id="old-buy",
-        quote=Quote("market-1", Side.BUY, Decimal("0.48"), Decimal("1")),
-        created_at=0,
+        quote=target_quote,
+        created_at=monotonic() - 3,
     )
     engine.open_orders[order.order_id] = order
 
     with caplog.at_level("WARNING", logger="predict-mm"):
-        asyncio.run(engine._cancel_stale_orders())
+        asyncio.run(
+            engine._manage_order_lifetimes(
+                "market-1",
+                book,
+                [target_quote],
+            )
+        )
 
     assert order.status == OrderStatus.OPEN
     assert "retrying next cycle" in caplog.text
+
+
+def test_unchanged_order_gets_one_extra_lifetime(caplog) -> None:
+    client = RepriceClient()
+    market = MarketConfig(id="market-1")
+    strategy = PassiveMakerStrategy(StrategyConfig())
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[market], cancel_after_seconds=10),
+        client=client,  # type: ignore[arg-type]
+        strategy=strategy,
+        risk=RiskManager(RiskConfig()),
+    )
+    book = asyncio.run(client.get_orderbook("market-1"))
+    target_quote = strategy.build_quotes(market, book)[0]
+    order = ManagedOrder(
+        order_id="unchanged-buy",
+        quote=target_quote,
+        created_at=monotonic() - 11,
+    )
+    engine.open_orders[order.order_id] = order
+    engine._order_quote_references[order.order_id] = engine._quote_reference(
+        book,
+        target_quote,
+    )
+
+    with caplog.at_level("INFO", logger="predict-mm"):
+        asyncio.run(
+            engine._manage_order_lifetimes(
+                "market-1",
+                book,
+                [target_quote],
+            )
+        )
+
+    assert client.cancelled == []
+    assert order.status == OrderStatus.OPEN
+    assert order.order_id in engine._extended_lifetime_orders
+    assert "one extra 10.0-second lifetime" in caplog.text
+
+
+def test_order_is_refreshed_after_second_unchanged_lifetime() -> None:
+    client = RepriceClient()
+    market = MarketConfig(id="market-1")
+    strategy = PassiveMakerStrategy(StrategyConfig())
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[market], cancel_after_seconds=10),
+        client=client,  # type: ignore[arg-type]
+        strategy=strategy,
+        risk=RiskManager(RiskConfig()),
+    )
+    book = asyncio.run(client.get_orderbook("market-1"))
+    target_quote = strategy.build_quotes(market, book)[0]
+    order = ManagedOrder(
+        order_id="maximum-lifetime-buy",
+        quote=target_quote,
+        created_at=monotonic() - 21,
+    )
+    engine.open_orders[order.order_id] = order
+    engine._order_quote_references[order.order_id] = engine._quote_reference(
+        book,
+        target_quote,
+    )
+
+    asyncio.run(
+        engine._manage_order_lifetimes(
+            "market-1",
+            book,
+            [target_quote],
+        )
+    )
+
+    assert client.cancelled == ["maximum-lifetime-buy"]
+    assert order.status == OrderStatus.CANCELED
+
+
+def test_second_lifetime_refresh_requotes_in_same_tick() -> None:
+    client = RepriceClient()
+    market = MarketConfig(id="market-1")
+    strategy = PassiveMakerStrategy(StrategyConfig())
+    engine = MarketMakerEngine(
+        config=BotConfig(
+            dry_run=True,
+            markets=[market],
+            cancel_after_seconds=10,
+        ),
+        client=client,  # type: ignore[arg-type]
+        strategy=strategy,
+        risk=RiskManager(RiskConfig()),
+    )
+    book = asyncio.run(client.get_orderbook("market-1"))
+    target_quote = strategy.build_quotes(market, book)[0]
+    order = ManagedOrder(
+        order_id="maximum-lifetime-buy",
+        quote=target_quote,
+        created_at=monotonic() - 21,
+    )
+    engine.open_orders[order.order_id] = order
+    engine._order_quote_references[order.order_id] = engine._quote_reference(
+        book,
+        target_quote,
+    )
+
+    asyncio.run(engine._tick())
+
+    assert client.cancelled == ["maximum-lifetime-buy"]
+    assert [quote.price for quote in client.created] == [target_quote.price]
+
+
+def test_order_is_refreshed_at_first_lifetime_when_target_changes() -> None:
+    client = RepriceClient()
+    market = MarketConfig(id="market-1")
+    strategy = PassiveMakerStrategy(StrategyConfig())
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[market], cancel_after_seconds=10),
+        client=client,  # type: ignore[arg-type]
+        strategy=strategy,
+        risk=RiskManager(RiskConfig()),
+    )
+    original_book = asyncio.run(client.get_orderbook("market-1"))
+    original_quote = strategy.build_quotes(market, original_book)[0]
+    order = ManagedOrder(
+        order_id="changed-buy",
+        quote=original_quote,
+        created_at=monotonic() - 11,
+    )
+    engine.open_orders[order.order_id] = order
+    engine._order_quote_references[order.order_id] = engine._quote_reference(
+        original_book,
+        original_quote,
+    )
+    changed_book = OrderBook(
+        market_id="market-1",
+        bids=[Level(Decimal("0.48"), Decimal("100"))],
+        asks=[Level(Decimal("0.55"), Decimal("100"))],
+        tick_size=Decimal("0.01"),
+    )
+    changed_quote = strategy.build_quotes(market, changed_book)[0]
+
+    asyncio.run(
+        engine._manage_order_lifetimes(
+            "market-1",
+            changed_book,
+            [changed_quote],
+        )
+    )
+
+    assert changed_quote.price == Decimal("0.46")
+    assert client.cancelled == ["changed-buy"]
+    assert order.status == OrderStatus.CANCELED
 
 
 def test_rest_reconciliation_recovers_missed_buy_fill() -> None:

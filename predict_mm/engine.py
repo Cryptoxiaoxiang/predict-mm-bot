@@ -6,7 +6,7 @@ import math
 from collections import deque
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from time import monotonic
@@ -26,6 +26,13 @@ from predict_mm.risk import RiskManager
 from predict_mm.strategy import PassiveMakerStrategy
 
 logger = logging.getLogger("predict-mm")
+
+
+@dataclass(frozen=True)
+class QuoteReference:
+    best_bid: Decimal | None
+    best_ask: Decimal | None
+    target_price: Decimal
 
 
 class MarketMakerEngine:
@@ -56,6 +63,8 @@ class MarketMakerEngine:
         self._submitted_fill_settlements: set[str] = set()
         self._handled_fill_settlements: set[str] = set()
         self._market_tick_sizes: dict[str, Decimal] = {}
+        self._order_quote_references: dict[str, QuoteReference] = {}
+        self._extended_lifetime_orders: set[str] = set()
         self._active_market_queue: deque[str] = deque()
         self._normal_market_queue: deque[str] = deque(
             market.id for market in self.config.enabled_markets
@@ -227,7 +236,6 @@ class MarketMakerEngine:
 
     async def _tick(self) -> None:
         await self._reconcile_order_statuses()
-        await self._cancel_stale_orders()
         markets = self._next_market_batch()
         if not markets:
             return
@@ -241,6 +249,7 @@ class MarketMakerEngine:
             return
 
         quotes_to_submit: list[Quote] = []
+        quote_references: dict[tuple[str, Side, str, str, Decimal], QuoteReference] = {}
         reserved_orders: list[ManagedOrder] = []
         for market, orderbook in await self._fetch_orderbooks(markets):
             if orderbook is None:
@@ -266,6 +275,7 @@ class MarketMakerEngine:
                 orderbook,
                 outcome_side=outcome_side,
             )
+            await self._manage_order_lifetimes(market.id, orderbook, quotes)
             if not quotes:
                 logger.info("No safe quote for %s", market.id)
                 self._no_safe_quote_until[market.id] = (
@@ -289,6 +299,10 @@ class MarketMakerEngine:
             approved = self.risk.filter_quotes(missing_quotes, active, positions)
             for quote in approved:
                 quotes_to_submit.append(quote)
+                quote_references[self._quote_key(quote)] = self._quote_reference(
+                    orderbook,
+                    quote,
+                )
                 reserved_orders.append(
                     ManagedOrder(
                         order_id=f"reserved:{len(reserved_orders)}",
@@ -297,7 +311,7 @@ class MarketMakerEngine:
                         status=OrderStatus.PENDING,
                     )
                 )
-        await self._submit_quotes(quotes_to_submit)
+        await self._submit_quotes(quotes_to_submit, quote_references)
         await self._reconcile_order_statuses()
 
     def _next_market_batch(self, *, now: float | None = None) -> list[MarketConfig]:
@@ -386,7 +400,14 @@ class MarketMakerEngine:
 
         return list(await asyncio.gather(*(fetch(market) for market in markets)))
 
-    async def _submit_quotes(self, quotes: list[Quote]) -> None:
+    async def _submit_quotes(
+        self,
+        quotes: list[Quote],
+        quote_references: dict[
+            tuple[str, Side, str, str, Decimal],
+            QuoteReference,
+        ] | None = None,
+    ) -> None:
         semaphore = asyncio.Semaphore(self.ORDER_SUBMIT_CONCURRENCY)
 
         async def submit(quote: Quote) -> ManagedOrder | None:
@@ -417,6 +438,9 @@ class MarketMakerEngine:
             if order is None:
                 continue
             self.open_orders[order.order_id] = order
+            reference = (quote_references or {}).get(self._quote_key(order.quote))
+            if reference is not None:
+                self._order_quote_references[order.order_id] = reference
             self._remember_order(order)
 
     def _working_orders(self) -> list[ManagedOrder]:
@@ -562,13 +586,92 @@ class MarketMakerEngine:
             )
             await self._cancel_order_safely(order)
 
-    async def _cancel_stale_orders(self) -> None:
+    async def _manage_order_lifetimes(
+        self,
+        market_id: str,
+        orderbook: OrderBook,
+        target_quotes: list[Quote],
+    ) -> None:
+        """Refresh quotes after one lifetime, with at most one unchanged extension."""
+        lifetime = self.config.cancel_after_seconds
+        targets = {
+            self._quote_selection_key(quote): quote
+            for quote in target_quotes
+        }
         for order in list(self.open_orders.values()):
-            if order.status not in {OrderStatus.PENDING, OrderStatus.OPEN} or order.is_emergency_exit:
+            if (
+                order.status not in {OrderStatus.PENDING, OrderStatus.OPEN}
+                or order.is_emergency_exit
+                or order.quote.market_id != market_id
+            ):
                 continue
-            if order.age_seconds < self.config.cancel_after_seconds:
+            if order.age_seconds < lifetime:
                 continue
-            await self._cancel_order_safely(order)
+
+            target_quote = targets.get(self._quote_selection_key(order.quote))
+            if target_quote is None:
+                logger.info(
+                    "Refreshing order %s after %.1f seconds: no safe current target quote",
+                    order.order_id,
+                    order.age_seconds,
+                )
+                await self._cancel_order_safely(order)
+                continue
+
+            current_reference = self._quote_reference(orderbook, target_quote)
+            original_reference = self._order_quote_references.setdefault(
+                order.order_id,
+                current_reference,
+            )
+            if order.age_seconds >= lifetime * 2:
+                logger.info(
+                    "Refreshing order %s after maximum %.1f-second lifetime",
+                    order.order_id,
+                    lifetime * 2,
+                )
+                await self._cancel_order_safely(order)
+                continue
+
+            if current_reference != original_reference:
+                logger.info(
+                    "Refreshing order %s after %.1f seconds: orderbook or target price changed",
+                    order.order_id,
+                    order.age_seconds,
+                )
+                await self._cancel_order_safely(order)
+                continue
+
+            if order.order_id not in self._extended_lifetime_orders:
+                self._extended_lifetime_orders.add(order.order_id)
+                logger.info(
+                    "Keeping order %s for one extra %.1f-second lifetime: "
+                    "orderbook and target price are unchanged",
+                    order.order_id,
+                    lifetime,
+                )
+
+    @staticmethod
+    def _quote_selection_key(quote: Quote) -> tuple[Side, str]:
+        canonical_outcome = (quote.outcome_side or quote.outcome).strip().upper()
+        return quote.side, canonical_outcome
+
+    @classmethod
+    def _quote_key(cls, quote: Quote) -> tuple[str, Side, str, str, Decimal]:
+        return (
+            quote.market_id,
+            quote.side,
+            quote.outcome.strip().casefold(),
+            (quote.outcome_side or "").strip().upper(),
+            quote.price,
+        )
+
+    @staticmethod
+    def _quote_reference(orderbook: OrderBook, quote: Quote) -> QuoteReference:
+        return QuoteReference(
+            best_bid=orderbook.best_bid.price if orderbook.best_bid else None,
+            best_ask=orderbook.best_ask.price if orderbook.best_ask else None,
+            target_price=quote.price,
+        )
 
     async def _cancel_order_safely(self, order: ManagedOrder) -> bool:
         """Keep a temporary cancel API failure from stopping the entire engine."""
@@ -582,6 +685,8 @@ class MarketMakerEngine:
             )
             return False
         order.status = OrderStatus.CANCELED
+        self._order_quote_references.pop(order.order_id, None)
+        self._extended_lifetime_orders.discard(order.order_id)
         self._remember_order(order)
         return True
 

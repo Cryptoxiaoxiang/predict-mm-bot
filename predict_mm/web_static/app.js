@@ -139,7 +139,7 @@ const validationFieldLabels = {
   outcome: '挂单选项',
   quote_size: '单次挂单数量',
   markets: '做市市场',
-  cancel_after_seconds: '撤单等待秒数',
+  cancel_after_seconds: '挂单存活时间（秒）',
   run_duration_hours: '有效期小时',
   run_duration_minutes: '有效期分钟',
   max_position_per_market: '单市场最大仓位',

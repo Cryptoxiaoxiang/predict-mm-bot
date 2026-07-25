@@ -40,7 +40,7 @@ class SetupPayload(BaseModel):
     dry_run: bool = False
     emergency_exit_on_buy_fill: bool = True
     markets: list[MarketPayload] = Field(min_length=1, max_length=200)
-    cancel_after_seconds: str = "8"
+    cancel_after_seconds: str = "60"
     run_duration_enabled: bool = False
     run_duration_hours: int = Field(default=0, ge=0, le=72)
     run_duration_minutes: int = Field(default=0, ge=0, le=59)
@@ -121,7 +121,7 @@ class DashboardState:
             ],
             "max_position_per_market": str(config.risk.max_position_per_market) if config else "10.0",
             "max_total_position": str(config.risk.max_total_position) if config else "50.0",
-            "cancel_after_seconds": config.cancel_after_seconds if config else 8,
+            "cancel_after_seconds": config.cancel_after_seconds if config else 60,
             "run_duration_enabled": bool(config and config.run_duration_seconds > 0),
             "run_duration_seconds": config.run_duration_seconds if config else 0,
             "run_expires_at": self.engine.run_expires_at if self.engine else None,
@@ -619,7 +619,7 @@ def _validate_setup(payload: SetupPayload) -> None:
                 detail="启用有效期时，小时和分钟不能同时为 0。",
             )
         for label, value in (
-            ("撤单等待秒数", payload.cancel_after_seconds),
+            ("挂单存活时间（秒）", payload.cancel_after_seconds),
             ("单市场最大仓位", payload.max_position_per_market),
             ("总最大仓位", payload.max_total_position),
         ):

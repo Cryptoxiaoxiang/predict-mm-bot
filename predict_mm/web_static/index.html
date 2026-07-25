@@ -91,7 +91,7 @@
               <div class="form-grid three-columns">
                 <label class="field"><span>单市场最大仓位</span><input name="max_position_per_market" inputmode="decimal" value="10.0" required /></label>
                 <label class="field"><span>总最大仓位</span><input name="max_total_position" inputmode="decimal" value="50.0" required /></label>
-                <label class="field"><span class="label-with-help">撤单等待秒数 <span class="tooltip" tabindex="0">?<span class="tooltip-text" role="tooltip">每笔挂单最多保留多久。到达该时间后，机器人会撤单并根据最新盘口重新报价。</span></span></span><input name="cancel_after_seconds" inputmode="decimal" value="8" required /></label>
+                <label class="field"><span class="label-with-help">挂单存活时间（秒） <span class="tooltip" tabindex="0">?<span class="tooltip-text" role="tooltip">价格逼近时会立即撤单，不受此时间限制。达到设定时间后，若买一、卖一和目标挂单价格均未变化，订单最多额外保留一个相同周期；第二个周期结束后撤单并按最新盘口重新挂单。</span></span></span><input name="cancel_after_seconds" inputmode="decimal" value="60" required /></label>
               </div>
               <div class="switch-row duration-setting-row">
                 <span class="duration-setting-copy"><strong>设置挂单有效期</strong><small>从每次启动机器人时开始倒计时；到期后撤销全部订单并停止机器人</small></span>

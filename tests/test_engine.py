@@ -296,12 +296,12 @@ def test_active_orders_exposes_each_open_order() -> None:
     engine.open_orders["buy"] = ManagedOrder(
         order_id="buy",
         quote=Quote("market-1", Side.BUY, Decimal("0.50"), Decimal("1")),
-        created_at=0,
+        created_at=monotonic() - 65,
     )
     engine.open_orders["sell"] = ManagedOrder(
         order_id="sell",
         quote=Quote("market-1", Side.SELL, Decimal("0.60"), Decimal("1")),
-        created_at=0,
+        created_at=monotonic() - 5,
     )
 
     assert engine.active_orders() == [
@@ -314,6 +314,7 @@ def test_active_orders_exposes_each_open_order() -> None:
             "price": "0.50",
             "size": "1",
             "is_emergency_exit": False,
+            "age_seconds": 65,
         },
         {
             "order_id": "sell",
@@ -324,6 +325,7 @@ def test_active_orders_exposes_each_open_order() -> None:
             "price": "0.60",
             "size": "1",
             "is_emergency_exit": False,
+            "age_seconds": 5,
         },
     ]
 
@@ -545,6 +547,26 @@ def test_open_order_markets_fill_remaining_batch_capacity() -> None:
     assert batch[19].id == "market-0"
 
 
+def test_same_market_yes_and_no_are_scheduled_independently() -> None:
+    markets = [
+        MarketConfig(id="market-1", outcome="YES"),
+        MarketConfig(id="market-1", outcome="NO"),
+    ]
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=markets),
+        client=RepriceClient(),  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+
+    batch = engine._next_market_batch(now=0)
+
+    assert [(market.id, market.outcome) for market in batch] == [
+        ("market-1", "YES"),
+        ("market-1", "NO"),
+    ]
+
+
 def test_no_safe_quote_markets_are_temporarily_backed_off() -> None:
     class EmptyBookClient(RepriceClient):
         def __init__(self) -> None:
@@ -605,6 +627,36 @@ def test_orderbook_fetch_concurrency_is_limited_to_five() -> None:
 
     assert len(results) == 20
     assert client.max_in_flight == 5
+
+
+def test_same_market_outcomes_share_one_orderbook_request() -> None:
+    class CountingBookClient(RepriceClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.requested: list[str] = []
+
+        async def get_orderbook(self, market_id: str) -> OrderBook:
+            self.requested.append(market_id)
+            return await super().get_orderbook(market_id)
+
+    client = CountingBookClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(
+            markets=[
+                MarketConfig(id="market-1", outcome="YES"),
+                MarketConfig(id="market-1", outcome="NO"),
+            ]
+        ),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+
+    results = asyncio.run(engine._fetch_orderbooks(engine.config.enabled_markets))
+
+    assert len(results) == 2
+    assert client.requested == ["market-1"]
+    assert results[0][1] is results[1][1]
 
 
 def test_order_submission_concurrency_is_limited_to_five() -> None:
@@ -924,7 +976,7 @@ def test_temporary_cancel_failure_keeps_engine_running_and_order_open(caplog) ->
     with caplog.at_level("WARNING", logger="predict-mm"):
         asyncio.run(
             engine._manage_order_lifetimes(
-                "market-1",
+                market,
                 book,
                 [target_quote],
             )
@@ -960,7 +1012,7 @@ def test_unchanged_order_gets_one_extra_lifetime(caplog) -> None:
     with caplog.at_level("INFO", logger="predict-mm"):
         asyncio.run(
             engine._manage_order_lifetimes(
-                "market-1",
+                market,
                 book,
                 [target_quote],
             )
@@ -997,7 +1049,7 @@ def test_order_is_refreshed_after_second_unchanged_lifetime() -> None:
 
     asyncio.run(
         engine._manage_order_lifetimes(
-            "market-1",
+            market,
             book,
             [target_quote],
         )
@@ -1005,6 +1057,42 @@ def test_order_is_refreshed_after_second_unchanged_lifetime() -> None:
 
     assert client.cancelled == ["maximum-lifetime-buy"]
     assert order.status == OrderStatus.CANCELED
+
+
+def test_lifetime_refresh_does_not_cancel_another_outcome_on_same_market() -> None:
+    client = RepriceClient()
+    yes_market = MarketConfig(id="market-1", outcome="YES")
+    no_market = MarketConfig(id="market-1", outcome="NO")
+    strategy = PassiveMakerStrategy(StrategyConfig())
+    engine = MarketMakerEngine(
+        config=BotConfig(
+            markets=[yes_market, no_market],
+            cancel_after_seconds=10,
+        ),
+        client=client,  # type: ignore[arg-type]
+        strategy=strategy,
+        risk=RiskManager(RiskConfig()),
+    )
+    book = asyncio.run(client.get_orderbook("market-1"))
+    yes_quote = strategy.build_quotes(yes_market, book, outcome_side="YES")[0]
+    no_quote = strategy.build_quotes(no_market, book, outcome_side="NO")[0]
+    no_order = ManagedOrder(
+        order_id="old-no-buy",
+        quote=no_quote,
+        created_at=monotonic() - 21,
+    )
+    engine.open_orders[no_order.order_id] = no_order
+
+    asyncio.run(
+        engine._manage_order_lifetimes(
+            yes_market,
+            book,
+            [yes_quote],
+        )
+    )
+
+    assert client.cancelled == []
+    assert no_order.status == OrderStatus.OPEN
 
 
 def test_second_lifetime_refresh_requotes_in_same_tick() -> None:
@@ -1072,7 +1160,7 @@ def test_order_is_refreshed_at_first_lifetime_when_target_changes() -> None:
 
     asyncio.run(
         engine._manage_order_lifetimes(
-            "market-1",
+            market,
             changed_book,
             [changed_quote],
         )

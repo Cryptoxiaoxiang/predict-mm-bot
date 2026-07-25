@@ -383,6 +383,16 @@ function collectMarkets() {
   }));
 }
 
+function formatOrderAge(value) {
+  const totalSeconds = Math.max(0, Math.floor(Number(value) || 0));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours) return `${hours}小时 ${minutes}分 ${seconds}秒`;
+  if (minutes) return `${minutes}分 ${seconds}秒`;
+  return `${seconds}秒`;
+}
+
 function renderOpenOrders(orders = []) {
   const list = document.querySelector('#open-orders-list');
   const summary = document.querySelector('#open-orders-summary');
@@ -431,12 +441,9 @@ function renderOpenOrders(orders = []) {
     price.textContent = order.price;
     const size = document.createElement('td');
     size.textContent = order.size;
-    const state = document.createElement('td');
-    const badge = document.createElement('span');
-    badge.className = 'status-badge';
-    badge.textContent = order.is_emergency_exit ? '紧急卖出' : '开放';
-    state.append(badge);
-    row.append(marketCell, sideCell, price, size, state);
+    const age = document.createElement('td');
+    age.textContent = formatOrderAge(order.age_seconds);
+    row.append(marketCell, sideCell, price, size, age);
     list.append(row);
   });
 }

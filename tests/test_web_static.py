@@ -48,3 +48,14 @@ def test_structured_api_errors_are_rendered_as_readable_messages() -> None:
     assert "function formatValidationItem" in javascript
     assert "市场网址 / Market ID" in javascript
     assert "new Error(data.detail" not in javascript
+
+
+def test_open_orders_show_order_age_instead_of_status() -> None:
+    static_dir = Path(__file__).parents[1] / "predict_mm" / "web_static"
+    html = (static_dir / "index.html").read_text(encoding="utf-8")
+    javascript = (static_dir / "app.js").read_text(encoding="utf-8")
+
+    assert "<th>挂单时间</th>" in html
+    assert "<th>状态</th>" not in html
+    assert "function formatOrderAge" in javascript
+    assert "formatOrderAge(order.age_seconds)" in javascript

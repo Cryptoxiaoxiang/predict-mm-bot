@@ -27,6 +27,8 @@ from predict_mm.strategy import PassiveMakerStrategy
 
 logger = logging.getLogger("predict-mm")
 
+MarketTaskKey = tuple[str, str]
+
 
 @dataclass(frozen=True)
 class QuoteReference:
@@ -65,11 +67,11 @@ class MarketMakerEngine:
         self._market_tick_sizes: dict[str, Decimal] = {}
         self._order_quote_references: dict[str, QuoteReference] = {}
         self._extended_lifetime_orders: set[str] = set()
-        self._active_market_queue: deque[str] = deque()
-        self._normal_market_queue: deque[str] = deque(
-            market.id for market in self.config.enabled_markets
+        self._active_market_queue: deque[MarketTaskKey] = deque()
+        self._normal_market_queue: deque[MarketTaskKey] = deque(
+            self._market_task_key(market) for market in self.config.enabled_markets
         )
-        self._no_safe_quote_until: dict[str, float] = {}
+        self._no_safe_quote_until: dict[MarketTaskKey, float] = {}
         self._degraded_fill_reconcile_interval_seconds = 0.5
         self._healthy_fill_reconcile_interval_seconds = max(
             2.0, self.config.poll_interval_seconds
@@ -126,6 +128,7 @@ class MarketMakerEngine:
                     "price": str(order.quote.price),
                     "size": str(order.quote.size),
                     "is_emergency_exit": order.is_emergency_exit,
+                    "age_seconds": max(0, math.floor(order.age_seconds)),
                 }
             )
         return orders
@@ -275,14 +278,15 @@ class MarketMakerEngine:
                 orderbook,
                 outcome_side=outcome_side,
             )
-            await self._manage_order_lifetimes(market.id, orderbook, quotes)
+            await self._manage_order_lifetimes(market, orderbook, quotes)
+            task_key = self._market_task_key(market)
             if not quotes:
                 logger.info("No safe quote for %s", market.id)
-                self._no_safe_quote_until[market.id] = (
+                self._no_safe_quote_until[task_key] = (
                     monotonic() + self.NO_SAFE_QUOTE_BACKOFF_SECONDS
                 )
                 continue
-            self._no_safe_quote_until.pop(market.id, None)
+            self._no_safe_quote_until.pop(task_key, None)
 
             active = self._working_orders() + reserved_orders
             missing_quotes = [
@@ -321,64 +325,106 @@ class MarketMakerEngine:
             for market in self.config.enabled_markets
             if market.id not in self._halted_markets
         ]
-        configured_by_id = {market.id: market for market in enabled}
-        active_ids = {
-            order.quote.market_id
-            for order in self._working_orders()
-            if not order.is_emergency_exit and order.quote.market_id in configured_by_id
+        configured_by_key = {
+            self._market_task_key(market): market
+            for market in enabled
+        }
+        working_orders = [
+            order for order in self._working_orders() if not order.is_emergency_exit
+        ]
+        active_keys = {
+            task_key
+            for task_key, market in configured_by_key.items()
+            if any(
+                self._order_matches_market_config(order, market)
+                for order in working_orders
+            )
         }
 
-        normal_order = [market.id for market in enabled if market.id not in active_ids]
+        normal_order = [
+            self._market_task_key(market)
+            for market in enabled
+            if self._market_task_key(market) not in active_keys
+        ]
         self._sync_market_queue(self._normal_market_queue, normal_order)
-        selected_ids = self._take_market_ids(
+        selected_keys = self._take_market_keys(
             self._normal_market_queue,
             self.MARKET_BATCH_SIZE,
-            eligible=lambda market_id: (
-                self._no_safe_quote_until.get(market_id, 0) <= now
+            eligible=lambda task_key: (
+                self._no_safe_quote_until.get(task_key, 0) <= now
             ),
         )
 
-        remaining = self.MARKET_BATCH_SIZE - len(selected_ids)
+        remaining = self.MARKET_BATCH_SIZE - len(selected_keys)
         if remaining:
-            active_order = [market.id for market in enabled if market.id in active_ids]
+            active_order = [
+                self._market_task_key(market)
+                for market in enabled
+                if self._market_task_key(market) in active_keys
+            ]
             self._sync_market_queue(self._active_market_queue, active_order)
-            selected_ids.extend(
-                self._take_market_ids(
+            selected_keys.extend(
+                self._take_market_keys(
                     self._active_market_queue,
                     remaining,
                 )
             )
 
-        return [configured_by_id[market_id] for market_id in selected_ids]
+        return [configured_by_key[task_key] for task_key in selected_keys]
 
     @staticmethod
-    def _sync_market_queue(queue: deque[str], ordered_ids: list[str]) -> None:
-        allowed = set(ordered_ids)
-        retained = [market_id for market_id in queue if market_id in allowed]
+    def _sync_market_queue(
+        queue: deque[MarketTaskKey],
+        ordered_keys: list[MarketTaskKey],
+    ) -> None:
+        allowed = set(ordered_keys)
+        retained = [task_key for task_key in queue if task_key in allowed]
         seen = set(retained)
-        retained.extend(market_id for market_id in ordered_ids if market_id not in seen)
+        retained.extend(task_key for task_key in ordered_keys if task_key not in seen)
         queue.clear()
         queue.extend(retained)
 
     @staticmethod
-    def _take_market_ids(
-        queue: deque[str],
+    def _take_market_keys(
+        queue: deque[MarketTaskKey],
         limit: int,
         *,
-        eligible: Callable[[str], bool] | None = None,
-    ) -> list[str]:
+        eligible: Callable[[MarketTaskKey], bool] | None = None,
+    ) -> list[MarketTaskKey]:
         if limit <= 0 or not queue:
             return []
-        is_eligible = eligible or (lambda _market_id: True)
-        selected: list[str] = []
+        is_eligible = eligible or (lambda _task_key: True)
+        selected: list[MarketTaskKey] = []
         for _ in range(len(queue)):
-            market_id = queue.popleft()
-            queue.append(market_id)
-            if is_eligible(market_id):
-                selected.append(market_id)
+            task_key = queue.popleft()
+            queue.append(task_key)
+            if is_eligible(task_key):
+                selected.append(task_key)
                 if len(selected) >= limit:
                     break
         return selected
+
+    @staticmethod
+    def _market_task_key(market: MarketConfig) -> MarketTaskKey:
+        return market.id, market.outcome.strip().casefold()
+
+    @staticmethod
+    def _order_matches_market_config(
+        order: ManagedOrder,
+        market: MarketConfig,
+    ) -> bool:
+        if order.quote.market_id != market.id:
+            return False
+        selected = market.outcome.strip().upper()
+        if selected in {"YES_NO", "YES&NO", "YES AND NO"}:
+            canonical_outcome = (
+                order.quote.outcome_side or order.quote.outcome
+            ).strip().upper()
+            return canonical_outcome in {"YES", "NO"}
+        return (
+            order.quote.outcome.strip().casefold()
+            == market.outcome.strip().casefold()
+        )
 
     async def _fetch_orderbooks(
         self,
@@ -386,19 +432,21 @@ class MarketMakerEngine:
     ) -> list[tuple[MarketConfig, OrderBook | None]]:
         semaphore = asyncio.Semaphore(self.MARKET_FETCH_CONCURRENCY)
 
-        async def fetch(market: MarketConfig) -> tuple[MarketConfig, OrderBook | None]:
+        async def fetch(market_id: str) -> tuple[str, OrderBook | None]:
             async with semaphore:
                 try:
-                    return market, await self.client.get_orderbook(market.id)
+                    return market_id, await self.client.get_orderbook(market_id)
                 except Exception as error:  # noqa: BLE001
                     logger.warning(
                         "Unable to read orderbook for %s; skipping this market for this cycle: %s",
-                        market.id,
+                        market_id,
                         error,
                     )
-                    return market, None
+                    return market_id, None
 
-        return list(await asyncio.gather(*(fetch(market) for market in markets)))
+        market_ids = list(dict.fromkeys(market.id for market in markets))
+        books = dict(await asyncio.gather(*(fetch(market_id) for market_id in market_ids)))
+        return [(market, books[market.id]) for market in markets]
 
     async def _submit_quotes(
         self,
@@ -588,7 +636,7 @@ class MarketMakerEngine:
 
     async def _manage_order_lifetimes(
         self,
-        market_id: str,
+        market: MarketConfig,
         orderbook: OrderBook,
         target_quotes: list[Quote],
     ) -> None:
@@ -602,7 +650,7 @@ class MarketMakerEngine:
             if (
                 order.status not in {OrderStatus.PENDING, OrderStatus.OPEN}
                 or order.is_emergency_exit
-                or order.quote.market_id != market_id
+                or not self._order_matches_market_config(order, market)
             ):
                 continue
             if order.age_seconds < lifetime:

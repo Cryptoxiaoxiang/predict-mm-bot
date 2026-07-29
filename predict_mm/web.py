@@ -33,7 +33,7 @@ class MarketPayload(BaseModel):
     market_id: str = Field(max_length=200)
     market_title: str = Field(default="", max_length=500)
     outcome: str = Field(default="YES", max_length=120)
-    quote_size: str = "1.0"
+    quote_size: str = "100"
 
 
 class SetupPayload(BaseModel):
@@ -513,27 +513,14 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
 
         settings = Settings.from_env()
         client = PredictClient(settings=settings, dry_run=False)
-        api_search_failed = False
         localized_page = bool(_market_locale_from_url(payload.market_url))
         try:
-            markets: list[dict] = []
-            if localized_page:
-                # The public localized page contains translated category titles,
-                # market titles and questions. The API search response is English.
-                markets = await client.markets_from_public_page(payload.market_url, slug)
-            elif settings.api_key:
-                try:
-                    markets = _markets_matching_slug(await client.search_markets(slug), slug)
-                    if not markets:
-                        markets = _markets_matching_slug(
-                            await client.search_markets(_search_query_from_slug(slug)),
-                            slug,
-                        )
-                except Exception as error:  # noqa: BLE001
-                    api_search_failed = True
-                    logging.getLogger("predict-mm").warning("官方市场搜索不可用，改用公开页面: %s", error)
-            if not markets:
-                markets = await client.markets_from_public_page(payload.market_url, slug)
+            markets, source, api_search_failed = await _resolve_markets_for_url(
+                client,
+                payload.market_url,
+                slug,
+                api_search_enabled=bool(settings.api_key),
+            )
         except Exception as error:  # noqa: BLE001
             logging.getLogger("predict-mm").warning("无法从市场网址识别 ID: %s", error)
             raise HTTPException(
@@ -550,7 +537,10 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
             "matches": matches,
             "message": (
                 "已从中文页面读取市场名称。请选择要挂单的市场和 Yes / No 选项。"
-                if matches and localized_page
+                if matches and source == "localized_page"
+                else
+                "中文页面暂时不可用，已通过官方搜索识别市场；名称可能显示为英文。请选择要挂单的市场和选项。"
+                if matches and localized_page and source == "api"
                 else
                 "官方搜索接口不可用，已从公开页面读取市场。请选择要挂单的市场和选项；实盘前仍需确认 API Key 有效。"
                 if matches and api_search_failed
@@ -673,6 +663,60 @@ def _search_query_from_slug(slug: str) -> str:
     without_timestamp = re.sub(r"[-_]\d{8,}$", "", slug)
     query = re.sub(r"[-_]+", " ", without_timestamp).strip()
     return query or slug
+
+
+async def _resolve_markets_for_url(
+    client: PredictClient,
+    market_url: str,
+    slug: str,
+    *,
+    api_search_enabled: bool,
+) -> tuple[list[dict], str, bool]:
+    """Resolve a URL while preserving translated titles when the localized page works."""
+    logger = logging.getLogger("predict-mm")
+    localized_page = bool(_market_locale_from_url(market_url))
+    page_attempted = False
+    page_error: Exception | None = None
+
+    if localized_page:
+        page_attempted = True
+        try:
+            markets = await client.markets_from_public_page(market_url, slug)
+        except Exception as error:  # noqa: BLE001
+            page_error = error
+            logger.warning("中文市场页面不可用，改用官方市场搜索: %s", error)
+        else:
+            if markets:
+                return markets, "localized_page", False
+
+    api_search_failed = False
+    if api_search_enabled:
+        try:
+            markets = _markets_matching_slug(await client.search_markets(slug), slug)
+            if not markets:
+                markets = _markets_matching_slug(
+                    await client.search_markets(_search_query_from_slug(slug)),
+                    slug,
+                )
+        except Exception as error:  # noqa: BLE001
+            api_search_failed = True
+            logger.warning("官方市场搜索不可用，改用公开页面: %s", error)
+        else:
+            if markets:
+                return markets, "api", False
+
+    if not page_attempted:
+        try:
+            markets = await client.markets_from_public_page(market_url, slug)
+        except Exception as error:  # noqa: BLE001
+            page_error = error
+        else:
+            if markets:
+                return markets, "public_page", api_search_failed
+
+    if page_error is not None:
+        raise page_error
+    return [], "", api_search_failed
 
 
 def _markets_matching_slug(markets: list[dict], slug: str) -> list[dict]:

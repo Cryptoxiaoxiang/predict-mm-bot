@@ -268,7 +268,7 @@ function addMarket(market = {}) {
   row.dataset.marketTitle = market.market_title || '';
   marketReferenceInput.value = market.market_title || market.market_id || '';
   setOutcomeOptions(row, market.outcomes || ['YES', 'NO'], market.outcome || 'YES');
-  row.querySelector('[data-field="quote_size"]').value = market.quote_size || '1.0';
+  row.querySelector('[data-field="quote_size"]').value = market.quote_size || '100';
   updateSelectedMarket(row);
   row.querySelector('.remove-market').addEventListener('click', () => {
     if (marketsList.children.length === 1) return;

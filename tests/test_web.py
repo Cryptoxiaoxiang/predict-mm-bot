@@ -1,3 +1,5 @@
+import asyncio
+
 from predict_mm.web import (
     MarketPayload,
     SetupPayload,
@@ -5,6 +7,7 @@ from predict_mm.web import (
     _market_locale_from_url,
     _market_slug_from_url,
     _markets_matching_slug,
+    _resolve_markets_for_url,
     _search_query_from_slug,
     _validate_setup,
 )
@@ -70,6 +73,67 @@ def test_market_url_filter_accepts_the_exact_market_slug() -> None:
     assert [market["id"] for market in matches] == [42]
 
 
+def test_localized_market_url_falls_back_to_official_search_when_page_fails() -> None:
+    slug = "will-the-us-confirm-that-aliens-exist-before-2027"
+
+    class StubClient:
+        page_calls = 0
+        search_calls: list[str] = []
+
+        async def markets_from_public_page(self, market_url: str, requested_slug: str) -> list[dict]:
+            self.page_calls += 1
+            raise RuntimeError("HTTP 500")
+
+        async def search_markets(self, query: str) -> list[dict]:
+            self.search_calls.append(query)
+            return [{"id": 10835, "categorySlug": slug, "title": "Aliens"}]
+
+    client = StubClient()
+    markets, source, api_search_failed = asyncio.run(
+        _resolve_markets_for_url(
+            client,  # type: ignore[arg-type]
+            f"https://predict.fun/zh-cn/market/{slug}",
+            slug,
+            api_search_enabled=True,
+        )
+    )
+
+    assert [market["id"] for market in markets] == [10835]
+    assert source == "api"
+    assert api_search_failed is False
+    assert client.page_calls == 1
+    assert client.search_calls == [slug]
+
+
+def test_localized_market_url_keeps_translated_page_results_when_available() -> None:
+    slug = "translated-market"
+
+    class StubClient:
+        search_calls = 0
+
+        async def markets_from_public_page(self, market_url: str, requested_slug: str) -> list[dict]:
+            return [{"id": 42, "categorySlug": slug, "title": "中文市场"}]
+
+        async def search_markets(self, query: str) -> list[dict]:
+            self.search_calls += 1
+            return []
+
+    client = StubClient()
+    markets, source, api_search_failed = asyncio.run(
+        _resolve_markets_for_url(
+            client,  # type: ignore[arg-type]
+            f"https://predict.fun/zh-cn/market/{slug}",
+            slug,
+            api_search_enabled=True,
+        )
+    )
+
+    assert [market["id"] for market in markets] == [42]
+    assert source == "localized_page"
+    assert api_search_failed is False
+    assert client.search_calls == 0
+
+
 def test_market_lookup_exposes_all_outcomes_for_user_selection() -> None:
     result = _market_lookup_result(
         {
@@ -110,6 +174,12 @@ def test_setup_accepts_non_binary_market_outcome() -> None:
     _validate_setup(payload)
 
     assert payload.markets[0].market_title == "France vs Spain · Match winner"
+
+
+def test_new_market_defaults_to_one_hundred_shares() -> None:
+    payload = MarketPayload(market_id="42")
+
+    assert payload.quote_size == "100"
 
 
 def test_setup_accepts_more_than_fifty_markets() -> None:

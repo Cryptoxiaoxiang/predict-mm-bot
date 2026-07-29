@@ -692,12 +692,18 @@ async def _resolve_markets_for_url(
     api_search_failed = False
     if api_search_enabled:
         try:
-            markets = _markets_matching_slug(await client.search_markets(slug), slug)
+            markets = await client.get_category_markets(slug)
+        except Exception as error:  # noqa: BLE001
+            logger.warning("官方分类接口不可用，继续尝试市场搜索: %s", error)
+            markets = []
+        try:
             if not markets:
-                markets = _markets_matching_slug(
-                    await client.search_markets(_search_query_from_slug(slug)),
-                    slug,
-                )
+                markets = _markets_matching_slug(await client.search_markets(slug), slug)
+                if not markets:
+                    markets = _markets_matching_slug(
+                        await client.search_markets(_search_query_from_slug(slug)),
+                        slug,
+                    )
         except Exception as error:  # noqa: BLE001
             api_search_failed = True
             logger.warning("官方市场搜索不可用，改用公开页面: %s", error)

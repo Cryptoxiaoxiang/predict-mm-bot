@@ -20,6 +20,32 @@ def test_headers_match_predict_docs() -> None:
     assert client._headers()["Authorization"] == "Bearer jwt"
 
 
+def test_category_slug_endpoint_returns_every_market_with_category_metadata() -> None:
+    client = PredictClient(Settings(api_key="api-key"), dry_run=False)
+    client._request = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "data": {
+                "slug": "cs2-pain-ast10-2026-07-30",
+                "title": "CS2: paiN vs Astralis",
+                "markets": [
+                    {"id": 1044739, "title": "Match Winner"},
+                    {"id": 1044740, "title": "Map 1 Winner"},
+                ],
+            }
+        }
+    )
+
+    markets = asyncio.run(client.get_category_markets("cs2-pain-ast10-2026-07-30"))
+
+    assert [market["id"] for market in markets] == [1044739, 1044740]
+    assert markets[0]["categoryTitle"] == "CS2: paiN vs Astralis"
+    assert markets[0]["categorySlug"] == "cs2-pain-ast10-2026-07-30"
+    client._request.assert_awaited_once_with(
+        "GET",
+        "/v1/categories/cs2-pain-ast10-2026-07-30",
+    )
+
+
 def test_custom_outcome_labels_map_to_canonical_orderbook_sides() -> None:
     client = PredictClient(Settings(), dry_run=False)
     client._market_metadata["818058"] = {

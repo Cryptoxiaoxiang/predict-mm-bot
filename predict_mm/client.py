@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -151,6 +152,23 @@ class PredictClient:
             for market in self._market_items(category.get("markets")):
                 add_market(market, category)
         return results
+
+    async def get_category_markets(self, slug: str) -> list[dict]:
+        """Get every market in the exact URL category through Predict's REST API."""
+        self._require_api_key()
+        encoded_slug = urllib.parse.quote(slug.strip(), safe="")
+        response = await self._request("GET", f"/v1/categories/{encoded_slug}")
+        category = self._data(response)
+        title = str(category.get("title") or "")
+        category_slug = str(category.get("slug") or slug)
+        return [
+            {
+                **market,
+                "categoryTitle": title,
+                "categorySlug": category_slug,
+            }
+            for market in self._market_items(category.get("markets"))
+        ]
 
     async def markets_from_public_page(self, market_url: str, slug: str) -> list[dict]:
         """Read the rendered public category page when API search is unavailable."""

@@ -78,16 +78,25 @@ def test_localized_market_url_falls_back_to_official_search_when_page_fails() ->
 
     class StubClient:
         page_calls = 0
-        category_calls: list[str] = []
+        category_calls: list[tuple[str, str]] = []
         search_calls: list[str] = []
 
         async def markets_from_public_page(self, market_url: str, requested_slug: str) -> list[dict]:
             self.page_calls += 1
             raise RuntimeError("HTTP 500")
 
-        async def get_category_markets(self, requested_slug: str) -> list[dict]:
-            self.category_calls.append(requested_slug)
-            return [{"id": 10835, "categorySlug": slug, "title": "Aliens"}]
+        async def get_category_markets(
+            self, requested_slug: str, *, locale: str = ""
+        ) -> list[dict]:
+            self.category_calls.append((requested_slug, locale))
+            return [
+                {
+                    "id": 10835,
+                    "categorySlug": slug,
+                    "title": "外星人",
+                    "translationLocale": locale,
+                }
+            ]
 
         async def search_markets(self, query: str) -> list[dict]:
             self.search_calls.append(query)
@@ -104,10 +113,10 @@ def test_localized_market_url_falls_back_to_official_search_when_page_fails() ->
     )
 
     assert [market["id"] for market in markets] == [10835]
-    assert source == "api"
+    assert source == "localized_api"
     assert api_search_failed is False
     assert client.page_calls == 0
-    assert client.category_calls == [slug]
+    assert client.category_calls == [(slug, "zh-cn")]
     assert client.search_calls == []
 
 
@@ -121,7 +130,9 @@ def test_localized_market_url_keeps_translated_page_results_when_available() -> 
         async def markets_from_public_page(self, market_url: str, requested_slug: str) -> list[dict]:
             return [{"id": 42, "categorySlug": slug, "title": "中文市场"}]
 
-        async def get_category_markets(self, requested_slug: str) -> list[dict]:
+        async def get_category_markets(
+            self, requested_slug: str, *, locale: str = ""
+        ) -> list[dict]:
             self.category_calls += 1
             return []
 

@@ -46,6 +46,62 @@ def test_category_slug_endpoint_returns_every_market_with_category_metadata() ->
     )
 
 
+def test_category_slug_endpoint_applies_official_chinese_translations() -> None:
+    client = PredictClient(Settings(api_key="api-key"), dry_run=False)
+    client._request = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[
+            {
+                "data": {
+                    "slug": "what-price-will-cz-hit-before-sep-2026",
+                    "title": "What FDV will CZ hit before September?",
+                    "markets": [
+                        {
+                            "id": 686320,
+                            "title": "CZ FDV",
+                            "question": "Will CZ hit $100M FDV before August?",
+                            "outcomes": [{"name": "Yes"}, {"name": "No"}],
+                        }
+                    ],
+                }
+            },
+            {
+                "translations": {
+                    "zh-CN": {
+                        "category": {"title": "CZ 在九月前会达到什么 FDV？"},
+                        "markets": [
+                            {
+                                "id": 686320,
+                                "title": "CZ FDV",
+                                "question": "CZ 会在八月前达到 1 亿美元 FDV 吗？",
+                                "outcomes": [
+                                    {"index": 1, "name": "是"},
+                                    {"index": 2, "name": "否"},
+                                ],
+                            }
+                        ],
+                    }
+                }
+            },
+        ]
+    )
+
+    markets = asyncio.run(
+        client.get_category_markets(
+            "what-price-will-cz-hit-before-sep-2026",
+            locale="zh-cn",
+        )
+    )
+
+    assert markets[0]["categoryTitle"] == "CZ 在九月前会达到什么 FDV？"
+    assert markets[0]["question"] == "CZ 会在八月前达到 1 亿美元 FDV 吗？"
+    assert markets[0]["outcomes"] == [{"name": "Yes"}, {"name": "No"}]
+    assert markets[0]["translationLocale"] == "zh-cn"
+    assert client._request.await_args_list == [
+        (("GET", "/v1/categories/what-price-will-cz-hit-before-sep-2026"),),
+        (("GET", "/v1/categories/what-price-will-cz-hit-before-sep-2026/translations"),),
+    ]
+
+
 def test_custom_outcome_labels_map_to_canonical_orderbook_sides() -> None:
     client = PredictClient(Settings(), dry_run=False)
     client._market_metadata["818058"] = {

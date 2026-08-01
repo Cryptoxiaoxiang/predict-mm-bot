@@ -153,15 +153,15 @@ class PredictClient:
                 add_market(market, category)
         return results
 
-    async def get_category_markets(self, slug: str) -> list[dict]:
-        """Get every market in the exact URL category through Predict's REST API."""
+    async def get_category_markets(self, slug: str, *, locale: str = "") -> list[dict]:
+        """Get every market in a category and apply official localized titles."""
         self._require_api_key()
         encoded_slug = urllib.parse.quote(slug.strip(), safe="")
         response = await self._request("GET", f"/v1/categories/{encoded_slug}")
         category = self._data(response)
         title = str(category.get("title") or "")
         category_slug = str(category.get("slug") or slug)
-        return [
+        markets = [
             {
                 **market,
                 "categoryTitle": title,
@@ -169,6 +169,57 @@ class PredictClient:
             }
             for market in self._market_items(category.get("markets"))
         ]
+        normalized_locale = locale.strip().replace("_", "-").lower()
+        if not normalized_locale:
+            return markets
+
+        try:
+            translations_response = await self._request(
+                "GET",
+                f"/v1/categories/{encoded_slug}/translations",
+            )
+        except Exception as error:  # noqa: BLE001
+            logger.warning("Predict.fun 市场翻译接口不可用，保留英文名称: %s", error)
+            return markets
+
+        translations_data = self._data(translations_response)
+        translations = translations_data.get("translations")
+        if not isinstance(translations, dict):
+            return markets
+        localized = next(
+            (
+                value
+                for language, value in translations.items()
+                if str(language).replace("_", "-").lower() == normalized_locale
+                and isinstance(value, dict)
+            ),
+            None,
+        )
+        if not localized:
+            return markets
+
+        translated_category = localized.get("category")
+        if isinstance(translated_category, dict):
+            translated_title = str(translated_category.get("title") or "").strip()
+            if translated_title:
+                title = translated_title
+
+        translated_markets = {
+            str(item.get("id")): item
+            for item in localized.get("markets") or []
+            if isinstance(item, dict) and item.get("id") is not None
+        }
+        for market in markets:
+            market["categoryTitle"] = title
+            translation = translated_markets.get(str(market.get("id")))
+            if not translation:
+                continue
+            for field in ("title", "question"):
+                translated_value = str(translation.get(field) or "").strip()
+                if translated_value:
+                    market[field] = translated_value
+            market["translationLocale"] = normalized_locale
+        return markets
 
     async def markets_from_public_page(self, market_url: str, slug: str) -> list[dict]:
         """Read the rendered public category page when API search is unavailable."""

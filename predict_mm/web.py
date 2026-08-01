@@ -513,7 +513,6 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
 
         settings = Settings.from_env()
         client = PredictClient(settings=settings, dry_run=False)
-        localized_page = bool(_market_locale_from_url(payload.market_url))
         try:
             markets, source, api_search_failed = await _resolve_markets_for_url(
                 client,
@@ -536,11 +535,11 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
             "market_id": None,
             "matches": matches,
             "message": (
+                "已通过 Predict.fun 官方接口读取中文市场名称。请选择要挂单的市场和选项。"
+                if matches and source == "localized_api"
+                else
                 "已从中文页面读取市场名称。请选择要挂单的市场和 Yes / No 选项。"
                 if matches and source == "localized_page"
-                else
-                "已通过 Predict.fun 官方接口识别市场。部分市场名称可能显示为英文，请选择要挂单的市场和选项。"
-                if matches and localized_page and source == "api"
                 else
                 "官方搜索接口不可用，已从公开页面读取市场。请选择要挂单的市场和选项；实盘前仍需确认 API Key 有效。"
                 if matches and api_search_failed
@@ -674,11 +673,12 @@ async def _resolve_markets_for_url(
 ) -> tuple[list[dict], str, bool]:
     """Resolve a URL while preserving translated titles when the localized page works."""
     logger = logging.getLogger("predict-mm")
-    localized_page = bool(_market_locale_from_url(market_url))
+    locale = _market_locale_from_url(market_url)
+    localized_page = bool(locale)
     api_search_failed = False
     if api_search_enabled:
         try:
-            markets = await client.get_category_markets(slug)
+            markets = await client.get_category_markets(slug, locale=locale)
         except Exception as error:  # noqa: BLE001
             logger.warning("官方分类接口不可用，继续尝试市场搜索: %s", error)
             markets = []
@@ -695,7 +695,12 @@ async def _resolve_markets_for_url(
             logger.warning("官方市场搜索不可用，改用公开页面: %s", error)
         else:
             if markets:
-                return markets, "api", False
+                source = (
+                    "localized_api"
+                    if any(market.get("translationLocale") for market in markets)
+                    else "api"
+                )
+                return markets, source, False
 
     markets = await client.markets_from_public_page(market_url, slug)
     if markets:

@@ -671,11 +671,23 @@ async def _resolve_markets_for_url(
     *,
     api_search_enabled: bool,
 ) -> tuple[list[dict], str, bool]:
-    """Resolve a URL while preserving translated titles when the localized page works."""
+    """Prefer localized page titles, then fall back to stable REST API lookup."""
     logger = logging.getLogger("predict-mm")
     locale = _market_locale_from_url(market_url)
     localized_page = bool(locale)
     api_search_failed = False
+    page_attempted = False
+
+    if localized_page:
+        page_attempted = True
+        try:
+            markets = await client.markets_from_public_page(market_url, slug)
+        except Exception as error:  # noqa: BLE001
+            logger.warning("中文市场页面不可用，改用官方接口识别: %s", error)
+        else:
+            if markets:
+                return markets, "localized_page", False
+
     if api_search_enabled:
         try:
             markets = await client.get_category_markets(slug, locale=locale)
@@ -701,6 +713,9 @@ async def _resolve_markets_for_url(
                     else "api"
                 )
                 return markets, source, False
+
+    if page_attempted:
+        return [], "", api_search_failed
 
     markets = await client.markets_from_public_page(market_url, slug)
     if markets:

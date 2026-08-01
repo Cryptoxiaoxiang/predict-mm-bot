@@ -115,7 +115,7 @@ def test_localized_market_url_falls_back_to_official_search_when_page_fails() ->
     assert [market["id"] for market in markets] == [10835]
     assert source == "localized_api"
     assert api_search_failed is False
-    assert client.page_calls == 0
+    assert client.page_calls == 1
     assert client.category_calls == [(slug, "zh-cn")]
     assert client.search_calls == []
 
@@ -153,8 +153,8 @@ def test_localized_market_url_keeps_translated_page_results_when_available() -> 
     assert [market["id"] for market in markets] == [42]
     assert source == "localized_page"
     assert api_search_failed is False
-    assert client.category_calls == 1
-    assert client.search_calls == 2
+    assert client.category_calls == 0
+    assert client.search_calls == 0
 
 
 def test_market_lookup_exposes_all_outcomes_for_user_selection() -> None:

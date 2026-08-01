@@ -539,7 +539,7 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
                 "已从中文页面读取市场名称。请选择要挂单的市场和 Yes / No 选项。"
                 if matches and source == "localized_page"
                 else
-                "中文页面暂时不可用，已通过官方搜索识别市场；名称可能显示为英文。请选择要挂单的市场和选项。"
+                "已通过 Predict.fun 官方接口识别市场。部分市场名称可能显示为英文，请选择要挂单的市场和选项。"
                 if matches and localized_page and source == "api"
                 else
                 "官方搜索接口不可用，已从公开页面读取市场。请选择要挂单的市场和选项；实盘前仍需确认 API Key 有效。"

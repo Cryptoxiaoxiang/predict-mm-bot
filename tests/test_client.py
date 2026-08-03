@@ -633,6 +633,107 @@ def test_wallet_fill_event_uses_confirmed_fill_size() -> None:
     assert event.settlement_id == "settlement-1"
 
 
+def test_wallet_fill_event_keeps_official_order_context() -> None:
+    client = PredictClient(Settings(), dry_run=True)
+
+    event = client._wallet_fill_event(
+        {
+            "type": "orderTransactionSuccess",
+            "orderId": "order-1",
+            "orderHash": "hash-1",
+            "fill": {"executedSizeWei": "29980000000000000000"},
+            "details": {
+                "marketId": 1054371,
+                "outcome": "NO",
+                "quoteType": "BID",
+                "quantity": "100",
+                "price": "0.451",
+            },
+        }
+    )
+
+    assert event is not None
+    assert event.market_id == "1054371"
+    assert event.side == Side.BUY
+    assert event.outcome == "NO"
+    assert event.price == Decimal("0.451")
+    assert event.order_size == Decimal("100")
+
+
+def test_wallet_status_event_keeps_official_order_context() -> None:
+    client = PredictClient(Settings(), dry_run=True)
+
+    event = client._wallet_event(
+        {
+            "type": "orderAccepted",
+            "orderId": "order-1",
+            "details": {
+                "marketId": "market-1",
+                "outcome": "YES",
+                "quoteType": "ASK",
+                "quantity": "3",
+                "price": "0.62",
+            },
+        }
+    )
+
+    assert event is not None
+    assert event.market_id == "market-1"
+    assert event.side == Side.SELL
+    assert event.outcome == "YES"
+    assert event.order_size == Decimal("3")
+
+
+def test_get_order_by_hash_recovers_buy_quote_and_outcome() -> None:
+    class StubClient(PredictClient):
+        async def _request(self, method, path, payload=None, query=None):
+            assert method == "GET"
+            assert path == "/v1/orders/0xhash"
+            return {
+                "data": {
+                    "id": "order-1",
+                    "marketId": 42,
+                    "amount": "100000000000000000000",
+                    "amountFilled": "2500000000000000000",
+                    "status": "FILLED",
+                    "isNegRisk": False,
+                    "isYieldBearing": True,
+                    "feeRateBps": 0,
+                    "order": {
+                        "hash": "0xhash",
+                        "side": 0,
+                        "tokenId": "token-no",
+                        "makerAmount": "45000000000000000000",
+                        "takerAmount": "100000000000000000000",
+                    },
+                }
+            }
+
+        async def _get_market_metadata(self, market_id: str) -> dict:
+            assert market_id == "42"
+            return {
+                "outcomes": [
+                    {"name": "Custom Yes", "indexSet": 1, "onChainId": "token-yes"},
+                    {"name": "Custom No", "indexSet": 2, "onChainId": "token-no"},
+                ]
+            }
+
+    client = StubClient(
+        Settings(api_key="api-key", jwt_token="jwt"), dry_run=False
+    )
+
+    order = asyncio.run(client.get_order_by_hash("0xhash"))
+
+    assert order is not None
+    assert order.order_id == "order-1"
+    assert order.quote.market_id == "42"
+    assert order.quote.side == Side.BUY
+    assert order.quote.price == Decimal("0.45")
+    assert order.quote.size == Decimal("100")
+    assert order.quote.outcome == "Custom No"
+    assert order.filled_size == Decimal("2.5")
+
+
 def test_wallet_fill_event_accepts_match_submission() -> None:
     client = PredictClient(Settings(), dry_run=True)
 

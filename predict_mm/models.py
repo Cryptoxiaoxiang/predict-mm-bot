@@ -83,6 +83,11 @@ class WalletFillEvent:
     order_hash: str | None = None
     settlement_id: str | None = None
     event_type: str = "orderTransactionSuccess"
+    market_id: str | None = None
+    side: Side | None = None
+    outcome: str | None = None
+    price: Decimal | None = None
+    order_size: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -91,6 +96,11 @@ class WalletOrderStatusEvent:
     event_type: str
     order_hash: str | None = None
     reason: str | None = None
+    market_id: str | None = None
+    side: Side | None = None
+    outcome: str | None = None
+    price: Decimal | None = None
+    order_size: Decimal | None = None
 
 
 def quantize_price(price: Decimal, tick_size: Decimal, side: Side) -> Decimal:

@@ -458,10 +458,10 @@ class MarketMakerEngine:
     ) -> None:
         semaphore = asyncio.Semaphore(self.ORDER_SUBMIT_CONCURRENCY)
 
-        async def submit(quote: Quote) -> ManagedOrder | None:
+        async def submit(quote: Quote) -> None:
             async with semaphore:
                 try:
-                    return await self.client.create_order(quote)
+                    order = await self.client.create_order(quote)
                 except Exception as error:  # noqa: BLE001
                     # A rejected passive quote must not bring down the wallet
                     # event stream. In particular, available collateral can
@@ -479,17 +479,37 @@ class MarketMakerEngine:
                         quote.price,
                         error,
                     )
-                    return None
+                    return
 
-        submitted = await asyncio.gather(*(submit(quote) for quote in quotes))
-        for order in submitted:
-            if order is None:
-                continue
-            self.open_orders[order.order_id] = order
-            reference = (quote_references or {}).get(self._quote_key(order.quote))
-            if reference is not None:
-                self._order_quote_references[order.order_id] = reference
-            self._remember_order(order)
+                # Register each successful response immediately. Waiting for the
+                # entire concurrent batch lets a fast wallet fill overtake local
+                # registration when another POST in the batch is still pending.
+                reference = (quote_references or {}).get(self._quote_key(order.quote))
+                self._register_order(order, reference)
+
+        await asyncio.gather(*(submit(quote) for quote in quotes))
+
+    def _register_order(
+        self,
+        order: ManagedOrder,
+        reference: QuoteReference | None = None,
+    ) -> ManagedOrder:
+        existing = self.open_orders.get(order.order_id)
+        if existing is None:
+            registered = order
+            self.open_orders[order.order_id] = registered
+        else:
+            # A wallet event can reconstruct the order before POST /v1/orders
+            # returns. Preserve fill/status progress while enriching its quote
+            # with the complete metadata from the eventual response.
+            existing.quote = order.quote
+            existing.order_hash = existing.order_hash or order.order_hash
+            existing.is_emergency_exit = existing.is_emergency_exit or order.is_emergency_exit
+            registered = existing
+        if reference is not None:
+            self._order_quote_references[registered.order_id] = reference
+        self._remember_order(registered)
+        return registered
 
     def _working_orders(self) -> list[ManagedOrder]:
         return [
@@ -562,13 +582,27 @@ class MarketMakerEngine:
                 None,
             )
         if order is None:
-            logger.warning(
-                "Predict.fun wallet event %s for unknown order %s%s",
-                event.event_type,
-                event.order_id,
-                f" ({event.reason})" if event.reason else "",
-            )
-            return
+            order = self._order_from_wallet_context(event)
+            if order is not None:
+                order.status = (
+                    OrderStatus.OPEN
+                    if event.event_type == "orderAccepted"
+                    else OrderStatus.CANCELED
+                )
+                self._register_order(order)
+                logger.warning(
+                    "Recovered wallet %s for order %s from Predict.fun event details",
+                    event.event_type,
+                    event.order_id,
+                )
+            else:
+                logger.warning(
+                    "Predict.fun wallet event %s for unresolved order %s%s",
+                    event.event_type,
+                    event.order_id,
+                    f" ({event.reason})" if event.reason else "",
+                )
+                return
 
         if event.event_type == "orderAccepted":
             order.status = OrderStatus.OPEN
@@ -784,14 +818,17 @@ class MarketMakerEngine:
                 None,
             )
         if order is None:
-            logger.critical(
-                "Received a wallet fill that is absent from memory and the safety journal: "
-                "order_id=%s order_hash=%s event=%s. The market requires manual review.",
-                event.order_id,
-                event.order_hash,
-                event.event_type,
-            )
-            return
+            order = await self._recover_wallet_fill_order(event)
+            if order is None:
+                logger.critical(
+                    "Received a wallet fill that could not be recovered from memory, "
+                    "the safety journal, event details, or the order hash: "
+                    "order_id=%s order_hash=%s event=%s. Manual review is required.",
+                    event.order_id,
+                    event.order_hash,
+                    event.event_type,
+                )
+                return
         if order.is_emergency_exit or order.quote.side != Side.BUY:
             return
 
@@ -836,6 +873,68 @@ class MarketMakerEngine:
         task = asyncio.create_task(self._emergency_exit(order, fill_size))
         self._emergency_tasks.add(task)
         task.add_done_callback(self._emergency_tasks.discard)
+
+    def _order_from_wallet_context(
+        self, event: WalletFillEvent | WalletOrderStatusEvent
+    ) -> ManagedOrder | None:
+        if not event.market_id or event.side is None or not event.outcome:
+            return None
+        event_fill_size = (
+            event.filled_size if isinstance(event, WalletFillEvent) else Decimal("0")
+        )
+        size = event.order_size or event_fill_size
+        if size <= Decimal("0"):
+            return None
+        return ManagedOrder(
+            order_id=event.order_id,
+            order_hash=event.order_hash,
+            quote=Quote(
+                market_id=event.market_id,
+                side=event.side,
+                price=event.price or Decimal("0"),
+                size=size,
+                outcome=event.outcome,
+                outcome_side=event.outcome.strip().upper()
+                if event.outcome.strip().upper() in {"YES", "NO"}
+                else None,
+            ),
+            created_at=monotonic(),
+            status=OrderStatus.PENDING,
+        )
+
+    async def _recover_wallet_fill_order(
+        self, event: WalletFillEvent
+    ) -> ManagedOrder | None:
+        order = self._order_from_wallet_context(event)
+        if order is None and event.order_hash:
+            recover = getattr(self.client, "get_order_by_hash", None)
+            if callable(recover):
+                try:
+                    order = await recover(event.order_hash)
+                except Exception as error:  # noqa: BLE001
+                    logger.critical(
+                        "Unable to recover wallet fill %s by order hash: %s",
+                        event.order_id,
+                        error,
+                    )
+        if order is None:
+            return None
+
+        order.order_id = event.order_id
+        order.order_hash = order.order_hash or event.order_hash
+        # The event being handled is the source of truth for this delta. A hash
+        # lookup may already report the cumulative fill, which would otherwise
+        # make the emergency-exit calculation incorrectly discard this event.
+        order.filled_size = Decimal("0")
+        registered = self._register_order(order)
+        logger.critical(
+            "Recovered previously unregistered %s order %s on market %s; "
+            "continuing wallet fill handling",
+            registered.quote.side.value,
+            registered.order_id,
+            registered.quote.market_id,
+        )
+        return registered
 
     async def _prepare_emergency_exit(self, filled_order: ManagedOrder) -> None:
         market_id = filled_order.quote.market_id

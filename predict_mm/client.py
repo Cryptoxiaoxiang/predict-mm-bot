@@ -345,6 +345,77 @@ class PredictClient:
                 filled_amounts[key] = amount
         return filled_amounts
 
+    async def get_order_by_hash(self, order_hash: str) -> ManagedOrder | None:
+        """Recover an authenticated order that arrived before its create response."""
+        if self.dry_run or not order_hash:
+            return None
+
+        self._require_api_key()
+        self._require_jwt()
+        response = await self._request("GET", f"/v1/orders/{order_hash}")
+        data = self._data(response)
+        order_data = data.get("order") if isinstance(data.get("order"), dict) else {}
+        market_id = str(data.get("marketId") or data.get("market_id") or "")
+        order_id = str(data.get("id") or data.get("orderId") or data.get("order_id") or "")
+        token_id = str(order_data.get("tokenId") or order_data.get("token_id") or "")
+        if not market_id or not order_id:
+            return None
+
+        side = self._order_side(order_data.get("side"))
+        if side is None:
+            return None
+        amount = self._from_wei(data.get("amount"))
+        filled_size = self._from_wei(
+            data.get("amountFilled") or data.get("amount_filled")
+        )
+        maker_amount = self._from_wei(
+            order_data.get("makerAmount") or order_data.get("maker_amount")
+        )
+        taker_amount = self._from_wei(
+            order_data.get("takerAmount") or order_data.get("taker_amount")
+        )
+        price = self._order_price(side, maker_amount, taker_amount)
+        market = await self._get_market_metadata(market_id)
+        outcome = self._find_outcome_name(market, token_id)
+        if not outcome:
+            logger.critical(
+                "Unable to map token %s while recovering order %s on market %s",
+                token_id,
+                order_id,
+                market_id,
+            )
+            return None
+        raw_status = str(data.get("status") or "UNKNOWN").strip().lower()
+        try:
+            status = OrderStatus(raw_status)
+        except ValueError:
+            status = OrderStatus.UNKNOWN
+
+        return ManagedOrder(
+            order_id=order_id,
+            order_hash=str(order_data.get("hash") or order_hash),
+            quote=Quote(
+                market_id=market_id,
+                side=side,
+                price=price,
+                size=amount or filled_size,
+                outcome=outcome,
+                token_id=token_id or None,
+                fee_rate_bps=self._optional_int(
+                    self._first_present(data, "feeRateBps", "fee_rate_bps")
+                ),
+                is_neg_risk=self._optional_bool(
+                    self._first_present(data, "isNegRisk", "is_neg_risk")
+                ),
+                is_yield_bearing=self._optional_bool(
+                    self._first_present(data, "isYieldBearing", "is_yield_bearing")
+                ),
+            ),
+            created_at=monotonic(),
+            status=status,
+            filled_size=filled_size,
+        )
+
     async def create_order(self, quote: Quote, *, post_only: bool = True) -> ManagedOrder:
         if self.dry_run:
             order = ManagedOrder(order_id=f"dry-{uuid4().hex[:12]}", quote=quote, created_at=monotonic())
@@ -1070,12 +1141,14 @@ class PredictClient:
         order_id = message.get("orderId")
         if not order_id or size_wei in (None, ""):
             return None
+        context = self._wallet_order_context(message)
         return WalletFillEvent(
             order_id=str(order_id),
             order_hash=str(message.get("orderHash") or "") or None,
             filled_size=Decimal(str(size_wei)) / Decimal(10**18),
             settlement_id=str(message.get("settlementId") or "") or None,
             event_type=event_type,
+            **context,
         )
 
     def _wallet_event(
@@ -1095,12 +1168,29 @@ class PredictClient:
         order_id = message.get("orderId")
         if order_id in (None, ""):
             return None
+        context = self._wallet_order_context(message)
         return WalletOrderStatusEvent(
             order_id=str(order_id),
             order_hash=str(message.get("orderHash") or "") or None,
             event_type=event_type,
             reason=str(message.get("reason") or "") or None,
+            **context,
         )
+
+    def _wallet_order_context(self, message: dict) -> dict[str, object]:
+        details = message.get("details")
+        if not isinstance(details, dict):
+            details = {}
+        market_id = details.get("marketId") or details.get("market_id")
+        return {
+            "market_id": str(market_id) if market_id not in (None, "") else None,
+            "side": self._order_side(details.get("quoteType") or details.get("quote_type")),
+            "outcome": str(details.get("outcome") or "") or None,
+            "price": self._optional_decimal(details.get("price")),
+            "order_size": self._optional_decimal(
+                details.get("quantity") or details.get("size")
+            ),
+        }
 
     @staticmethod
     def _wallet_event_payload(message: dict) -> dict | None:
@@ -1246,6 +1336,39 @@ class PredictClient:
             return value
         return str(value).strip().lower() in {"1", "true", "yes"}
 
+    @staticmethod
+    def _optional_decimal(value: object) -> Decimal | None:
+        if value in (None, ""):
+            return None
+        try:
+            return Decimal(str(value))
+        except (ArithmeticError, ValueError):
+            return None
+
+    @staticmethod
+    def _from_wei(value: object) -> Decimal:
+        if value in (None, ""):
+            return Decimal("0")
+        return Decimal(str(value)) / Decimal(10**18)
+
+    @staticmethod
+    def _order_side(value: object) -> Side | None:
+        raw_value = getattr(value, "value", value)
+        normalized = "" if raw_value is None else str(raw_value).strip().upper()
+        if normalized in {"0", "BUY", "BID"}:
+            return Side.BUY
+        if normalized in {"1", "SELL", "ASK"}:
+            return Side.SELL
+        return None
+
+    @staticmethod
+    def _order_price(
+        side: Side, maker_amount: Decimal, taker_amount: Decimal
+    ) -> Decimal:
+        if side == Side.BUY:
+            return maker_amount / taker_amount if taker_amount else Decimal("0")
+        return taker_amount / maker_amount if maker_amount else Decimal("0")
+
     def _first_present(self, data: dict, *keys: str) -> object:
         for key in keys:
             if key in data:
@@ -1254,6 +1377,7 @@ class PredictClient:
 
     def _find_outcome_token_id(self, market: dict, outcome_name: str) -> str | None:
         wanted = outcome_name.strip().lower()
+        canonical_index_set = {"yes": 1, "no": 2}.get(wanted)
         for outcome in market.get("outcomes") or []:
             if not isinstance(outcome, dict):
                 continue
@@ -1262,10 +1386,35 @@ class PredictClient:
                 for key in ("name", "outcome", "side", "title")
             }
             if wanted and wanted not in names:
-                continue
+                try:
+                    index_set = int(
+                        str(self._first_present(outcome, "indexSet", "index_set"))
+                    )
+                except (TypeError, ValueError):
+                    index_set = None
+                if canonical_index_set is None or index_set != canonical_index_set:
+                    continue
             token_id = self._extract_token_id(outcome)
             if token_id:
                 return token_id
+        return None
+
+    def _find_outcome_name(self, market: dict, token_id: str) -> str | None:
+        for outcome in market.get("outcomes") or []:
+            if not isinstance(outcome, dict):
+                continue
+            if self._extract_token_id(outcome) != token_id:
+                continue
+            name = self._outcome_name(outcome).strip()
+            if name:
+                return name
+            try:
+                index_set = int(
+                    str(self._first_present(outcome, "indexSet", "index_set"))
+                )
+            except (TypeError, ValueError):
+                continue
+            return {1: "YES", 2: "NO"}.get(index_set)
         return None
 
     def _extract_token_id(self, data: object) -> str | None:

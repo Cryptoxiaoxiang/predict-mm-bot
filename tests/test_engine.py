@@ -284,6 +284,160 @@ def test_wallet_fill_uses_order_restored_from_safety_journal() -> None:
     assert client.remembered
 
 
+def test_unknown_buy_fill_is_recovered_from_wallet_event_details() -> None:
+    client = EmergencyClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+
+    asyncio.run(
+        handle_fill_and_wait(
+            engine,
+            WalletFillEvent(
+                order_id="fast-fill",
+                order_hash="fast-hash",
+                filled_size=Decimal("2.5"),
+                market_id="market-1",
+                side=Side.BUY,
+                outcome="NO",
+                price=Decimal("0.45"),
+                order_size=Decimal("100"),
+            ),
+        )
+    )
+
+    recovered = engine.open_orders["fast-fill"]
+    assert recovered.filled_size == Decimal("2.5")
+    assert client.cancelled_markets == ["market-1"]
+    quote, post_only = client.created[0]
+    assert quote.side == Side.SELL
+    assert quote.outcome == "NO"
+    assert quote.size == Decimal("2.5")
+    assert post_only is False
+
+
+def test_unknown_sell_fill_is_recovered_without_second_sell() -> None:
+    client = EmergencyClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+
+    asyncio.run(
+        engine._handle_wallet_fill(
+            WalletFillEvent(
+                order_id="sell-fill",
+                filled_size=Decimal("2"),
+                market_id="market-1",
+                side=Side.SELL,
+                outcome="YES",
+                price=Decimal("0.01"),
+                order_size=Decimal("2"),
+            )
+        )
+    )
+
+    assert "sell-fill" in engine.open_orders
+    assert client.created == []
+    assert client.cancelled_markets == []
+
+
+def test_submit_registers_each_order_before_concurrent_batch_finishes() -> None:
+    class ConcurrentClient(EmergencyClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fast_registered = asyncio.Event()
+            self.release_slow = asyncio.Event()
+
+        async def create_order(
+            self, quote: Quote, *, post_only: bool = True
+        ) -> ManagedOrder:
+            if quote.market_id == "slow":
+                await self.release_slow.wait()
+            order = ManagedOrder(
+                order_id=f"order-{quote.market_id}",
+                quote=quote,
+                created_at=monotonic(),
+                status=OrderStatus.PENDING,
+            )
+            if quote.market_id == "fast":
+                self.fast_registered.set()
+            return order
+
+        def persist_tracked_order(self, order: ManagedOrder) -> None:
+            return None
+
+    async def exercise() -> None:
+        client = ConcurrentClient()
+        engine = MarketMakerEngine(
+            config=BotConfig(
+                markets=[MarketConfig(id="fast"), MarketConfig(id="slow")]
+            ),
+            client=client,  # type: ignore[arg-type]
+            strategy=PassiveMakerStrategy(StrategyConfig()),
+            risk=RiskManager(RiskConfig()),
+        )
+        task = asyncio.create_task(
+            engine._submit_quotes(
+                [
+                    Quote("fast", Side.BUY, Decimal("0.4"), Decimal("1")),
+                    Quote("slow", Side.BUY, Decimal("0.4"), Decimal("1")),
+                ]
+            )
+        )
+        await client.fast_registered.wait()
+        await asyncio.sleep(0)
+        assert "order-fast" in engine.open_orders
+        assert "order-slow" not in engine.open_orders
+        client.release_slow.set()
+        await task
+
+    asyncio.run(exercise())
+
+
+def test_unknown_fill_falls_back_to_order_hash_lookup() -> None:
+    class RecoveryClient(EmergencyClient):
+        async def get_order_by_hash(self, order_hash: str) -> ManagedOrder:
+            assert order_hash == "recover-hash"
+            return ManagedOrder(
+                order_id="official-id",
+                order_hash=order_hash,
+                quote=Quote(
+                    "market-1", Side.BUY, Decimal("0.4"), Decimal("4"), "Yes"
+                ),
+                created_at=monotonic(),
+                status=OrderStatus.FILLED,
+                filled_size=Decimal("1.5"),
+            )
+
+    client = RecoveryClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+
+    asyncio.run(
+        handle_fill_and_wait(
+            engine,
+            WalletFillEvent(
+                order_id="wallet-id",
+                order_hash="recover-hash",
+                filled_size=Decimal("1.5"),
+            ),
+        )
+    )
+
+    assert "wallet-id" in engine.open_orders
+    assert client.created[0][0].size == Decimal("1.5")
+
+
 def test_active_orders_exposes_each_open_order() -> None:
     engine = MarketMakerEngine(
         config=BotConfig(

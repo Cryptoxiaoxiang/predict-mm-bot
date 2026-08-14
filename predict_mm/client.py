@@ -570,7 +570,13 @@ class PredictClient:
         open_order_ids = await self._get_open_order_ids(market_id)
         if not open_order_ids:
             return
-        await self._request("POST", "/v1/orders/remove", {"data": {"ids": open_order_ids}})
+        # Predict.fun validates ``ids`` with maxItems(100). The orders reader is
+        # deliberately paginated, so an account with more than 100 open orders
+        # must remove them in API-sized batches instead of sending one oversized
+        # payload that stops the engine during startup or shutdown cleanup.
+        for start in range(0, len(open_order_ids), 100):
+            batch = open_order_ids[start : start + 100]
+            await self._request("POST", "/v1/orders/remove", {"data": {"ids": batch}})
 
     async def _get_open_order_ids(self, market_id: str | None = None) -> list[str]:
         query: dict[str, object] = {"first": 100, "status": "OPEN"}

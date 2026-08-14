@@ -961,3 +961,22 @@ def test_order_safety_journal_restores_removed_buy_order(tmp_path) -> None:
     assert restored[0].filled_size == Decimal("1")
     assert restored[0].quote.outcome == "No"
     assert journal.stat().st_mode & 0o777 == 0o600
+
+
+def test_cancel_all_orders_removes_at_most_100_ids_per_request() -> None:
+    client = PredictClient(
+        Settings(api_key="api-key", jwt_token="jwt"), dry_run=False
+    )
+    client._get_open_order_ids = AsyncMock(  # type: ignore[method-assign]
+        return_value=[f"order-{index}" for index in range(205)]
+    )
+    client._request = AsyncMock(return_value={"data": {}})  # type: ignore[method-assign]
+
+    asyncio.run(client.cancel_all_orders())
+
+    assert client._request.await_count == 3
+    batches = [call.args[2]["data"]["ids"] for call in client._request.await_args_list]
+    assert [len(batch) for batch in batches] == [100, 100, 5]
+    assert [order_id for batch in batches for order_id in batch] == [
+        f"order-{index}" for index in range(205)
+    ]

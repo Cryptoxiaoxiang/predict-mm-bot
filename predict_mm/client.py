@@ -813,7 +813,12 @@ class PredictClient:
         market = await self._get_market_metadata(quote.market_id)
         return replace(
             quote,
-            token_id=quote.token_id or self._find_outcome_token_id(market, quote.outcome),
+            token_id=quote.token_id
+            or self._find_outcome_token_id(
+                market,
+                quote.outcome,
+                outcome_side=quote.outcome_side,
+            ),
             fee_rate_bps=quote.fee_rate_bps
             if quote.fee_rate_bps is not None
             else self._optional_int(self._first_present(market, "feeRateBps", "fee_rate_bps")),
@@ -1498,24 +1503,42 @@ class PredictClient:
                 return data[key]
         return None
 
-    def _find_outcome_token_id(self, market: dict, outcome_name: str) -> str | None:
-        wanted = outcome_name.strip().lower()
-        canonical_index_set = {"yes": 1, "no": 2}.get(wanted)
+    def _find_outcome_token_id(
+        self,
+        market: dict,
+        outcome_name: str,
+        *,
+        outcome_side: str | None = None,
+    ) -> str | None:
+        wanted_names = self._outcome_label_aliases(outcome_name)
+        canonical_side = (outcome_side or outcome_name).strip().upper()
+        canonical_index_set = {"YES": 1, "NO": 2}.get(canonical_side)
         for outcome in market.get("outcomes") or []:
             if not isinstance(outcome, dict):
                 continue
-            names = {
-                str(outcome.get(key, "")).strip().lower()
-                for key in ("name", "outcome", "side", "title")
-            }
-            if wanted and wanted not in names:
-                try:
-                    index_set = int(
-                        str(self._first_present(outcome, "indexSet", "index_set"))
-                    )
-                except (TypeError, ValueError):
-                    index_set = None
-                if canonical_index_set is None or index_set != canonical_index_set:
+            try:
+                index_set = int(
+                    str(self._first_present(outcome, "indexSet", "index_set"))
+                )
+            except (TypeError, ValueError):
+                index_set = None
+            if canonical_index_set is not None:
+                if index_set is not None and index_set != canonical_index_set:
+                    continue
+                if index_set is None:
+                    explicit_side = str(
+                        outcome.get("side") or outcome.get("outcome") or outcome.get("name") or ""
+                    ).strip().upper()
+                    if explicit_side != canonical_side:
+                        continue
+            else:
+                names = {
+                    alias
+                    for key in ("name", "outcome", "side", "title")
+                    if outcome.get(key) not in (None, "")
+                    for alias in self._outcome_label_aliases(str(outcome.get(key, "")))
+                }
+                if not wanted_names or wanted_names.isdisjoint(names):
                     continue
             token_id = self._extract_token_id(outcome)
             if token_id:

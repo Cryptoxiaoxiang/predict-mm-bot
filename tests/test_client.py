@@ -597,6 +597,41 @@ def test_quote_metadata_can_be_completed_from_market_response() -> None:
     assert completed.is_yield_bearing is True
 
 
+def test_custom_localized_quote_uses_canonical_side_to_find_token_id() -> None:
+    class StubClient(PredictClient):
+        async def _request(self, method, path, payload=None, query=None):  # type: ignore[no-untyped-def]
+            assert method == "GET"
+            assert path == "/v1/markets/total-kills"
+            return {
+                "data": {
+                    "feeRateBps": 0,
+                    "isNegRisk": False,
+                    "isYieldBearing": False,
+                    "outcomes": [
+                        {"name": "Over 50.5", "indexSet": 1, "tokenId": "token-over"},
+                        {"name": "Under 50.5", "indexSet": 2, "tokenId": "token-under"},
+                    ],
+                }
+            }
+
+    client = StubClient(Settings(api_key="api-key", jwt_token="jwt"), dry_run=False)
+    quote = Quote(
+        market_id="total-kills",
+        side=Side.BUY,
+        price=Decimal("0.42"),
+        size=Decimal("100"),
+        outcome="小 50.5",
+        outcome_side="NO",
+    )
+
+    completed = asyncio.run(client._complete_quote_with_market_metadata(quote))
+
+    assert completed.token_id == "token-under"
+    assert completed.fee_rate_bps == 0
+    assert completed.is_neg_risk is False
+    assert completed.is_yield_bearing is False
+
+
 def test_positions_convert_wei_to_share_quantities() -> None:
     class StubClient(PredictClient):
         async def _request(self, method, path, payload=None, query=None):  # type: ignore[no-untyped-def]

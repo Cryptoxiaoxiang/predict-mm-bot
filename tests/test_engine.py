@@ -650,7 +650,7 @@ def test_market_batches_are_limited_to_twenty_and_rotate() -> None:
     }
 
 
-def test_markets_without_open_orders_are_scheduled_first() -> None:
+def test_open_order_markets_are_scheduled_first_during_websocket_outage() -> None:
     markets = [MarketConfig(id=f"market-{index}") for index in range(25)]
     engine = MarketMakerEngine(
         config=BotConfig(markets=markets),
@@ -666,14 +666,38 @@ def test_markets_without_open_orders_are_scheduled_first() -> None:
 
     batch = engine._next_market_batch(now=0)
 
+    assert batch[0].id == "market-24"
+    assert [market.id for market in batch[1:]] == [
+        f"market-{index}" for index in range(19)
+    ]
+    assert len(batch) == 20
+
+
+def test_connected_websocket_removes_open_order_markets_from_rest_batch() -> None:
+    markets = [MarketConfig(id=f"market-{index}") for index in range(25)]
+    client = RepriceClient()
+    client.orderbook_stream_connected = True
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=markets),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+    engine.open_orders["working"] = ManagedOrder(
+        order_id="working",
+        quote=Quote("market-24", Side.BUY, Decimal("0.40"), Decimal("1")),
+        created_at=monotonic(),
+    )
+
+    batch = engine._next_market_batch(now=0)
+
     assert [market.id for market in batch] == [
         f"market-{index}" for index in range(20)
     ]
     assert "market-24" not in {market.id for market in batch}
-    assert len(batch) == 20
 
 
-def test_open_order_markets_fill_remaining_batch_capacity() -> None:
+def test_open_order_markets_use_rest_before_new_quotes_during_outage() -> None:
     markets = [MarketConfig(id=f"market-{index}") for index in range(25)]
     engine = MarketMakerEngine(
         config=BotConfig(markets=markets),
@@ -695,10 +719,12 @@ def test_open_order_markets_fill_remaining_batch_capacity() -> None:
 
     batch = engine._next_market_batch(now=0)
 
-    assert [market.id for market in batch[:19]] == [
-        f"market-{index}" for index in range(6, 25)
+    assert [market.id for market in batch[:6]] == [
+        f"market-{index}" for index in range(6)
     ]
-    assert batch[19].id == "market-0"
+    assert [market.id for market in batch[6:]] == [
+        f"market-{index}" for index in range(6, 20)
+    ]
 
 
 def test_same_market_yes_and_no_are_scheduled_independently() -> None:

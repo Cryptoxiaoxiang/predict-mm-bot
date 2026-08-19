@@ -10,7 +10,7 @@ from predict_mm.client import (
     PredictTransientError,
 )
 from predict_mm.config import Settings
-from predict_mm.models import ManagedOrder, OrderStatus, Quote, Side
+from predict_mm.models import ManagedOrder, OrderBook, OrderStatus, Quote, Side
 
 
 def test_headers_match_predict_docs() -> None:
@@ -861,6 +861,72 @@ def test_wallet_stream_answers_official_heartbeat_and_yields_enveloped_fill() ->
     assert events[0].order_id == "order-1"
     assert events[0].filled_size == Decimal("1")
     assert client.wallet_stream_connected is False
+
+
+def test_orderbook_stream_subscribes_and_yields_live_snapshot() -> None:
+    class FakeWebSocket:
+        def __init__(self) -> None:
+            self.sent: list[dict] = []
+            self.messages = iter(
+                [
+                    {"type": "R", "requestId": 1, "success": True},
+                    {"type": "M", "topic": "heartbeat", "data": 1736696400000},
+                    {
+                        "type": "M",
+                        "topic": "predictOrderbook/market-1",
+                        "data": {
+                            "marketId": 1,
+                            "bids": [[0.49, 100]],
+                            "asks": [[0.51, 200]],
+                        },
+                    },
+                ]
+            )
+
+        async def send(self, raw_message: str) -> None:
+            self.sent.append(json.loads(raw_message))
+
+        async def recv(self) -> str:
+            return json.dumps(next(self.messages))
+
+    class FakeConnection:
+        def __init__(self, websocket: FakeWebSocket) -> None:
+            self.websocket = websocket
+
+        async def __aenter__(self) -> FakeWebSocket:
+            return self.websocket
+
+        async def __aexit__(self, *_args) -> None:  # type: ignore[no-untyped-def]
+            return None
+
+    async def first_book(client: PredictClient) -> OrderBook:
+        async for orderbook in client.stream_orderbook_updates(lambda: {"market-1"}):
+            assert client.orderbook_stream_connected is True
+            return orderbook
+        raise AssertionError("expected an orderbook update")
+
+    websocket = FakeWebSocket()
+    client = PredictClient(Settings(api_key="api-key"), dry_run=False)
+    with patch(
+        "websockets.asyncio.client.connect",
+        return_value=FakeConnection(websocket),
+    ):
+        orderbook = asyncio.run(first_book(client))
+
+    assert websocket.sent == [
+        {
+            "method": "subscribe",
+            "requestId": 1,
+            "params": ["predictOrderbook/market-1"],
+        },
+        {"method": "heartbeat", "data": 1736696400000},
+    ]
+    assert orderbook.market_id == "market-1"
+    assert orderbook.best_bid is not None
+    assert orderbook.best_bid.price == Decimal("0.49")
+    assert orderbook.best_ask is not None
+    assert orderbook.best_ask.price == Decimal("0.51")
+    assert client.orderbook_stream_connected is False
 
 
 def test_get_order_filled_amounts_maps_id_and_hash() -> None:

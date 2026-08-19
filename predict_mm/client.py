@@ -63,6 +63,7 @@ class PredictClient:
         self._market_metadata: dict[str, dict] = {}
         self._order_journal_path = Path(settings.order_journal_path)
         self.wallet_stream_connected = False
+        self.orderbook_stream_connected = False
 
     async def close(self) -> None:
         return None
@@ -545,6 +546,101 @@ class PredictClient:
                         yield event
         finally:
             self.wallet_stream_connected = False
+
+    async def stream_orderbook_updates(
+        self,
+        market_ids: Callable[[], set[str]],
+    ):
+        """Yield live orderbooks while keeping subscriptions aligned with open orders."""
+        if self.dry_run:
+            return
+
+        self._require_api_key()
+        try:
+            from websockets.asyncio.client import connect
+        except ImportError as error:
+            raise RuntimeError("WebSocket support requires the websockets package.") from error
+
+        self.orderbook_stream_connected = False
+        subscribed: set[str] = set()
+        request_id = 0
+        try:
+            async with connect(
+                "wss://ws.predict.fun/ws",
+                additional_headers={"x-api-key": self.settings.api_key},
+            ) as websocket:
+                self.orderbook_stream_connected = True
+                logger.info("Predict.fun 挂单盘口监听已连接。")
+                while True:
+                    desired = {str(market_id) for market_id in market_ids() if market_id}
+                    for market_id in sorted(desired - subscribed):
+                        request_id += 1
+                        await websocket.send(
+                            json.dumps(
+                                {
+                                    "method": "subscribe",
+                                    "requestId": request_id,
+                                    "params": [f"predictOrderbook/{market_id}"],
+                                }
+                            )
+                        )
+                        subscribed.add(market_id)
+                    for market_id in sorted(subscribed - desired):
+                        request_id += 1
+                        await websocket.send(
+                            json.dumps(
+                                {
+                                    "method": "unsubscribe",
+                                    "requestId": request_id,
+                                    "params": [f"predictOrderbook/{market_id}"],
+                                }
+                            )
+                        )
+                        subscribed.remove(market_id)
+
+                    try:
+                        raw_message = await asyncio.wait_for(websocket.recv(), timeout=0.5)
+                    except asyncio.TimeoutError:
+                        continue
+                    message = json.loads(raw_message)
+                    error = message.get("error") if isinstance(message, dict) else None
+                    if isinstance(error, dict):
+                        raise RuntimeError(
+                            "Predict.fun 盘口订阅失败："
+                            + str(error.get("message") or error.get("code") or "unknown error")
+                        )
+                    if message.get("type") == "R":
+                        if message.get("success") is False:
+                            raise RuntimeError("Predict.fun 盘口订阅请求被拒绝。")
+                        continue
+                    if message.get("type") != "M":
+                        continue
+                    if message.get("topic") == "heartbeat":
+                        await websocket.send(
+                            json.dumps({"method": "heartbeat", "data": message.get("data")})
+                        )
+                        continue
+
+                    topic = str(message.get("topic") or "")
+                    if not topic.startswith("predictOrderbook/"):
+                        continue
+                    market_id = topic.removeprefix("predictOrderbook/")
+                    payload = message.get("data")
+                    if not isinstance(payload, dict):
+                        continue
+                    market = self._market_metadata.get(market_id) or {}
+                    tick_size = (
+                        self._tick_size_from_market(market, market_id)
+                        if market
+                        else None
+                    )
+                    yield self._parse_orderbook(
+                        market_id,
+                        payload,
+                        tick_size=tick_size,
+                    )
+        finally:
+            self.orderbook_stream_connected = False
 
     async def cancel_order(self, order_id: str) -> None:
         if self.dry_run:

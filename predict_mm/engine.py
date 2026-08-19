@@ -57,14 +57,18 @@ class MarketMakerEngine:
         self.risk = risk
         self.open_orders: dict[str, ManagedOrder] = {}
         self._stop = asyncio.Event()
-        self._fill_events: asyncio.Queue[WalletFillEvent | WalletOrderStatusEvent] = asyncio.Queue()
+        self._fill_events: asyncio.Queue[
+            WalletFillEvent | WalletOrderStatusEvent | OrderBook
+        ] = asyncio.Queue()
         self._wallet_task: asyncio.Task[None] | None = None
+        self._orderbook_task: asyncio.Task[None] | None = None
         self._emergency_tasks: set[asyncio.Task[None]] = set()
         self._halted_markets: set[str] = set()
         self._prepared_emergency_markets: set[str] = set()
         self._submitted_fill_settlements: set[str] = set()
         self._handled_fill_settlements: set[str] = set()
         self._market_tick_sizes: dict[str, Decimal] = {}
+        self._latest_orderbooks: dict[str, OrderBook] = {}
         self._order_quote_references: dict[str, QuoteReference] = {}
         self._extended_lifetime_orders: set[str] = set()
         self._active_market_queue: deque[MarketTaskKey] = deque()
@@ -151,6 +155,7 @@ class MarketMakerEngine:
 
             if not self.config.dry_run:
                 self._wallet_task = asyncio.create_task(self._watch_wallet_fills())
+                self._orderbook_task = asyncio.create_task(self._watch_active_orderbooks())
 
             if self._run_deadline is not None:
                 logger.info(
@@ -164,6 +169,7 @@ class MarketMakerEngine:
             next_fill_reconcile_at = (
                 monotonic() + self._degraded_fill_reconcile_interval_seconds
             )
+            next_lifetime_check_at = monotonic() + 1.0
             while not self._stop.is_set():
                 now = monotonic()
                 if self._run_deadline is not None and now >= self._run_deadline:
@@ -180,10 +186,17 @@ class MarketMakerEngine:
                     next_fill_reconcile_at = (
                         monotonic() + self._fill_reconcile_interval()
                     )
+                if now >= next_lifetime_check_at:
+                    await self._manage_active_order_lifetimes_from_cache()
+                    next_lifetime_check_at = monotonic() + 1.0
                 if monotonic() >= next_quote_at:
                     await self._tick()
                     next_quote_at = monotonic() + self.MARKET_BATCH_INTERVAL_SECONDS
-                next_deadline = min(next_quote_at, next_fill_reconcile_at)
+                next_deadline = min(
+                    next_quote_at,
+                    next_fill_reconcile_at,
+                    next_lifetime_check_at,
+                )
                 if self._run_deadline is not None:
                     next_deadline = min(next_deadline, self._run_deadline)
                 await self._wait_for_fill_or_deadline(next_deadline)
@@ -192,6 +205,10 @@ class MarketMakerEngine:
                 self._wallet_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await self._wallet_task
+            if self._orderbook_task is not None:
+                self._orderbook_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self._orderbook_task
             for task in self._emergency_tasks:
                 task.cancel()
             if self._emergency_tasks:
@@ -203,6 +220,9 @@ class MarketMakerEngine:
 
     def _wallet_stream_connected(self) -> bool:
         return bool(getattr(self.client, "wallet_stream_connected", False))
+
+    def _orderbook_stream_connected(self) -> bool:
+        return bool(getattr(self.client, "orderbook_stream_connected", False))
 
     def _fill_reconcile_interval(self) -> float:
         if self._wallet_stream_connected():
@@ -223,6 +243,32 @@ class MarketMakerEngine:
                 with suppress(asyncio.TimeoutError):
                     await asyncio.wait_for(self._stop.wait(), timeout=1)
 
+    def _active_order_market_ids(self) -> set[str]:
+        return {
+            order.quote.market_id
+            for order in self._working_orders()
+            if not order.is_emergency_exit
+        }
+
+    async def _watch_active_orderbooks(self) -> None:
+        while not self._stop.is_set():
+            try:
+                async for orderbook in self.client.stream_orderbook_updates(
+                    self._active_order_market_ids
+                ):
+                    await self._fill_events.put(orderbook)
+                    if self._stop.is_set():
+                        return
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:  # noqa: BLE001
+                logger.warning(
+                    "Active-order WebSocket disconnected: %s; using REST fallback until reconnect",
+                    error,
+                )
+            with suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._stop.wait(), timeout=1)
+
     async def _wait_for_fill_or_deadline(self, deadline: float) -> None:
         while not self._stop.is_set():
             timeout = max(0, min(0.2, deadline - monotonic()))
@@ -232,10 +278,46 @@ class MarketMakerEngine:
                 event = await asyncio.wait_for(self._fill_events.get(), timeout=timeout)
             except asyncio.TimeoutError:
                 continue
-            if isinstance(event, WalletOrderStatusEvent):
+            if isinstance(event, OrderBook):
+                await self._handle_orderbook_update(event)
+            elif isinstance(event, WalletOrderStatusEvent):
                 self._handle_wallet_order_status(event)
             else:
                 await self._handle_wallet_fill(event)
+
+    async def _handle_orderbook_update(self, orderbook: OrderBook) -> None:
+        tick_size = orderbook.tick_size or self._market_tick_sizes.get(orderbook.market_id)
+        if tick_size is not None and orderbook.tick_size is None:
+            orderbook = replace(orderbook, tick_size=tick_size)
+        self._latest_orderbooks[orderbook.market_id] = orderbook
+        if tick_size is not None:
+            self._market_tick_sizes[orderbook.market_id] = tick_size
+        if self.config.replace_on_orderbook_change:
+            await self._cancel_orders_approached_by_market(orderbook.market_id, orderbook)
+
+    async def _manage_active_order_lifetimes_from_cache(self) -> None:
+        for market in self.config.enabled_markets:
+            if not any(
+                self._order_matches_market_config(order, market)
+                for order in self._working_orders()
+                if not order.is_emergency_exit
+            ):
+                continue
+            orderbook = self._latest_orderbooks.get(market.id)
+            if orderbook is None:
+                continue
+            outcome_side = None
+            resolve_outcome_side = getattr(self.client, "cached_outcome_side", None)
+            if callable(resolve_outcome_side):
+                outcome_side = resolve_outcome_side(market.id, market.outcome)
+                if outcome_side is None:
+                    continue
+            quotes = self.strategy.build_quotes(
+                market,
+                orderbook,
+                outcome_side=outcome_side,
+            )
+            await self._manage_order_lifetimes(market, orderbook, quotes)
 
     async def _tick(self) -> None:
         await self._reconcile_order_statuses()
@@ -257,6 +339,7 @@ class MarketMakerEngine:
         for market, orderbook in await self._fetch_orderbooks(markets):
             if orderbook is None:
                 continue
+            self._latest_orderbooks[market.id] = orderbook
             if orderbook.tick_size is not None:
                 self._market_tick_sizes[market.id] = orderbook.tick_size
             if self.config.replace_on_orderbook_change:
@@ -346,27 +429,32 @@ class MarketMakerEngine:
             for market in enabled
             if self._market_task_key(market) not in active_keys
         ]
+        active_order = [
+            self._market_task_key(market)
+            for market in enabled
+            if self._market_task_key(market) in active_keys
+        ]
         self._sync_market_queue(self._normal_market_queue, normal_order)
-        selected_keys = self._take_market_keys(
-            self._normal_market_queue,
-            self.MARKET_BATCH_SIZE,
-            eligible=lambda task_key: (
-                self._no_safe_quote_until.get(task_key, 0) <= now
-            ),
-        )
+        self._sync_market_queue(self._active_market_queue, active_order)
 
-        remaining = self.MARKET_BATCH_SIZE - len(selected_keys)
-        if remaining:
-            active_order = [
-                self._market_task_key(market)
-                for market in enabled
-                if self._market_task_key(market) in active_keys
-            ]
-            self._sync_market_queue(self._active_market_queue, active_order)
+        selected_keys: list[MarketTaskKey] = []
+        if not self._orderbook_stream_connected():
             selected_keys.extend(
                 self._take_market_keys(
                     self._active_market_queue,
+                    self.MARKET_BATCH_SIZE,
+                )
+            )
+
+        remaining = self.MARKET_BATCH_SIZE - len(selected_keys)
+        if remaining:
+            selected_keys.extend(
+                self._take_market_keys(
+                    self._normal_market_queue,
                     remaining,
+                    eligible=lambda task_key: (
+                        self._no_safe_quote_until.get(task_key, 0) <= now
+                    ),
                 )
             )
 

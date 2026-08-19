@@ -163,11 +163,19 @@ def test_market_lookup_exposes_all_outcomes_for_user_selection() -> None:
             "id": 42,
             "title": "Match winner",
             "categoryTitle": "France vs. Spain",
-            "outcomes": [{"name": "FRA"}, {"name": "Draw"}, {"name": "ESP"}],
+            "outcomes": [
+                {"name": "FRA", "indexSet": 1},
+                {"name": "Draw"},
+                {"name": "ESP", "indexSet": 2},
+            ],
         }
     )
 
-    assert result["outcomes"] == ["FRA", "Draw", "ESP"]
+    assert result["outcomes"] == [
+        {"name": "FRA", "index_set": 1},
+        {"name": "Draw", "index_set": None},
+        {"name": "ESP", "index_set": 2},
+    ]
     assert result["category_title"] == "France vs. Spain"
 
 
@@ -180,7 +188,10 @@ def test_market_lookup_keeps_order_outcomes_canonical_on_chinese_pages() -> None
         }
     )
 
-    assert result["outcomes"] == ["Yes", "No"]
+    assert result["outcomes"] == [
+        {"name": "Yes", "index_set": 1},
+        {"name": "No", "index_set": 2},
+    ]
 
 
 def test_setup_accepts_non_binary_market_outcome() -> None:
@@ -190,6 +201,7 @@ def test_setup_accepts_non_binary_market_outcome() -> None:
                 market_id="42",
                 market_title="France vs Spain · Match winner",
                 outcome="FRA",
+                outcome_index_set=1,
             )
         ]
     )
@@ -197,6 +209,7 @@ def test_setup_accepts_non_binary_market_outcome() -> None:
     _validate_setup(payload)
 
     assert payload.markets[0].market_title == "France vs Spain · Match winner"
+    assert payload.markets[0].outcome_index_set == 1
 
 
 def test_new_market_defaults_to_one_hundred_shares() -> None:

@@ -191,7 +191,7 @@ function setField(name, value, target = form) {
   if (field && value !== undefined && value !== null) field.value = value;
 }
 
-function setOutcomeOptions(row, outcomes, selected = '') {
+function setOutcomeOptions(row, outcomes, selected = '', selectedIndexSet = null) {
   const select = row.querySelector('[data-field="outcome"]');
   const canonicalOutcome = (value) => {
     const text = String(value || '').trim();
@@ -201,20 +201,44 @@ function setOutcomeOptions(row, outcomes, selected = '') {
     if (['YES_NO', 'YES&NO', 'YES AND NO'].includes(normalized)) return 'YES_NO';
     return text;
   };
-  const values = [...new Set((outcomes || []).map(canonicalOutcome).filter(Boolean))];
-  if (!values.length) values.push('Yes', 'No');
-  const hasYes = values.includes('Yes');
-  const hasNo = values.includes('No');
-  if (hasYes && hasNo && !values.includes('YES_NO')) values.push('YES_NO');
+  const entries = (outcomes || []).map((outcome) => {
+    if (outcome && typeof outcome === 'object') {
+      return {
+        name: canonicalOutcome(outcome.name),
+        indexSet: Number(outcome.index_set) || null,
+      };
+    }
+    const name = canonicalOutcome(outcome);
+    return {
+      name,
+      indexSet: name === 'Yes' ? 1 : name === 'No' ? 2 : null,
+    };
+  }).filter((entry) => entry.name);
+  const uniqueEntries = entries.filter((entry, index) => (
+    entries.findIndex((candidate) => candidate.name === entry.name) === index
+  ));
+  if (!uniqueEntries.length) {
+    uniqueEntries.push({name: 'Yes', indexSet: 1}, {name: 'No', indexSet: 2});
+  }
+  const hasYes = uniqueEntries.some((entry) => entry.indexSet === 1 || entry.name === 'Yes');
+  const hasNo = uniqueEntries.some((entry) => entry.indexSet === 2 || entry.name === 'No');
+  if (hasYes && hasNo && !uniqueEntries.some((entry) => entry.name === 'YES_NO')) {
+    uniqueEntries.push({name: 'YES_NO', indexSet: null});
+  }
   const selectedValue = canonicalOutcome(selected);
-  if (selectedValue && !values.includes(selectedValue)) values.push(selectedValue);
-  select.replaceChildren(...values.map((value) => {
+  if (selectedValue && !uniqueEntries.some((entry) => entry.name === selectedValue)) {
+    uniqueEntries.push({name: selectedValue, indexSet: Number(selectedIndexSet) || null});
+  }
+  select.replaceChildren(...uniqueEntries.map((entry) => {
     const option = document.createElement('option');
-    option.value = value;
-    option.textContent = selectedOutcomeLabel(value);
+    option.value = entry.name;
+    option.textContent = selectedOutcomeLabel(entry.name);
+    if (entry.indexSet) option.dataset.indexSet = String(entry.indexSet);
     return option;
   }));
-  select.value = selectedValue && values.includes(selectedValue) ? selectedValue : values[0];
+  select.value = selectedValue && uniqueEntries.some((entry) => entry.name === selectedValue)
+    ? selectedValue
+    : uniqueEntries[0].name;
 }
 
 function renumberMarkets() {
@@ -251,12 +275,12 @@ function marketDisplayName(market) {
   return question || category;
 }
 
-function applyResolvedMarket(row, market, selectedOutcome) {
+function applyResolvedMarket(row, market, selectedOutcome, selectedIndexSet = null) {
   const title = marketDisplayName(market);
   row.querySelector('[data-field="market_id"]').value = market.id;
   row.querySelector('[data-field="market_reference"]').value = title;
   row.dataset.marketTitle = title;
-  setOutcomeOptions(row, market.outcomes || ['YES', 'NO'], selectedOutcome);
+  setOutcomeOptions(row, market.outcomes || ['YES', 'NO'], selectedOutcome, selectedIndexSet);
   updateSelectedMarket(row);
 }
 
@@ -267,7 +291,12 @@ function addMarket(market = {}) {
   marketIdInput.value = market.market_id || '';
   row.dataset.marketTitle = market.market_title || '';
   marketReferenceInput.value = market.market_title || market.market_id || '';
-  setOutcomeOptions(row, market.outcomes || ['YES', 'NO'], market.outcome || 'YES');
+  setOutcomeOptions(
+    row,
+    market.outcomes || ['YES', 'NO'],
+    market.outcome || 'YES',
+    market.outcome_index_set,
+  );
   row.querySelector('[data-field="quote_size"]').value = market.quote_size || '100';
   updateSelectedMarket(row);
   row.querySelector('.remove-market').addEventListener('click', () => {
@@ -309,20 +338,28 @@ function renderMarketLookup(row, result) {
     group.append(title);
     const outcomes = market.outcomes?.length ? market.outcomes : ['YES', 'NO'];
     outcomes.forEach((outcome) => {
+      const outcomeName = typeof outcome === 'object' ? outcome.name : outcome;
+      const outcomeIndexSet = typeof outcome === 'object' ? outcome.index_set : null;
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'market-match';
-      button.textContent = `选择「${selectedOutcomeLabel(outcome)}」挂单`;
+      button.textContent = `选择「${selectedOutcomeLabel(outcomeName)}」挂单`;
       button.addEventListener('click', () => {
-        applyResolvedMarket(row, market, outcome);
+        applyResolvedMarket(row, market, outcomeName, outcomeIndexSet);
         container.hidden = true;
         formDirty = true;
-        showNotice(`已选择 ${marketDisplayName(market)} · ${selectedOutcomeLabel(outcome)}`);
+        showNotice(`已选择 ${marketDisplayName(market)} · ${selectedOutcomeLabel(outcomeName)}`);
       });
       group.append(button);
     });
-    const hasYes = outcomes.some((outcome) => outcome.toUpperCase() === 'YES');
-    const hasNo = outcomes.some((outcome) => outcome.toUpperCase() === 'NO');
+    const hasYes = outcomes.some((outcome) => (
+      (typeof outcome === 'object' && Number(outcome.index_set) === 1)
+      || String(typeof outcome === 'object' ? outcome.name : outcome).toUpperCase() === 'YES'
+    ));
+    const hasNo = outcomes.some((outcome) => (
+      (typeof outcome === 'object' && Number(outcome.index_set) === 2)
+      || String(typeof outcome === 'object' ? outcome.name : outcome).toUpperCase() === 'NO'
+    ));
     if (hasYes && hasNo) {
       const bothButton = document.createElement('button');
       bothButton.type = 'button';
@@ -375,12 +412,17 @@ function renderMarkets(markets = []) {
 }
 
 function collectMarkets() {
-  return [...marketsList.querySelectorAll('.market-row')].map((row) => ({
-    market_id: row.querySelector('[data-field="market_id"]').value.trim(),
-    market_title: row.dataset.marketTitle || '',
-    outcome: row.querySelector('[data-field="outcome"]').value,
-    quote_size: row.querySelector('[data-field="quote_size"]').value.trim(),
-  }));
+  return [...marketsList.querySelectorAll('.market-row')].map((row) => {
+    const outcomeSelect = row.querySelector('[data-field="outcome"]');
+    const rawIndexSet = outcomeSelect.selectedOptions[0]?.dataset.indexSet;
+    return {
+      market_id: row.querySelector('[data-field="market_id"]').value.trim(),
+      market_title: row.dataset.marketTitle || '',
+      outcome: outcomeSelect.value,
+      outcome_index_set: rawIndexSet ? Number(rawIndexSet) : null,
+      quote_size: row.querySelector('[data-field="quote_size"]').value.trim(),
+    };
+  });
 }
 
 function formatOrderAge(value) {

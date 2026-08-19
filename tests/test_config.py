@@ -33,3 +33,19 @@ def test_load_config_reads_optional_run_duration(tmp_path) -> None:
     config = load_config(config_path)
 
     assert config.run_duration_seconds == 4 * 3600 + 30 * 60
+
+
+def test_load_config_reads_official_outcome_index_set(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[[markets]]\n"
+        'id = "total-kills"\n'
+        'outcome = "大 55.5"\n'
+        "outcome_index_set = 1\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.markets[0].outcome == "大 55.5"
+    assert config.markets[0].outcome_index_set == 1

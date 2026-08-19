@@ -30,6 +30,7 @@ class MarketAnswers:
     market_id: str
     market_title: str = ""
     outcome: str = "YES"
+    outcome_index_set: int | None = None
     quote_size: str = "1.0"
     token_id: str = ""
 
@@ -97,6 +98,7 @@ id = "{_toml_escape(market.market_id)}"
 title = "{_toml_escape(market.market_title)}"
 enabled = true
 outcome = "{market.outcome}"
+{f'outcome_index_set = {market.outcome_index_set}' if market.outcome_index_set is not None else ''}
 quote_size = "{_toml_escape(market.quote_size)}"
 token_id = "{_toml_escape(market.token_id)}"
 '''

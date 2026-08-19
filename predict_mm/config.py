@@ -59,6 +59,7 @@ class MarketConfig:
     id: str
     enabled: bool = True
     outcome: str = "YES"
+    outcome_index_set: int | None = None
     quote_size: Decimal | None = None
     token_id: str | None = None
     fee_rate_bps: int | None = None

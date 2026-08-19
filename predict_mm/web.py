@@ -33,6 +33,7 @@ class MarketPayload(BaseModel):
     market_id: str = Field(max_length=200)
     market_title: str = Field(default="", max_length=500)
     outcome: str = Field(default="YES", max_length=120)
+    outcome_index_set: int | None = Field(default=None, ge=1, le=2)
     quote_size: str = "100"
 
 
@@ -115,6 +116,7 @@ class DashboardState:
                     "market_id": market.id,
                     "market_title": market.title or self.market_titles.get(market.id, ""),
                     "outcome": market.outcome,
+                    "outcome_index_set": market.outcome_index_set,
                     "quote_size": str(market.quote_size or config.strategy.quote_size),
                 }
                 for market in markets
@@ -419,6 +421,7 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
                 market_id=market.market_id.strip(),
                 market_title=market.market_title.strip(),
                 outcome=market.outcome,
+                outcome_index_set=market.outcome_index_set,
                 quote_size=market.quote_size.strip(),
             )
             for market in payload.markets
@@ -753,7 +756,7 @@ def _markets_matching_slug(markets: list[dict], slug: str) -> list[dict]:
 
 
 def _market_lookup_result(market: dict) -> dict[str, object]:
-    outcomes: list[str] = []
+    outcomes: list[dict[str, object]] = []
     raw_outcomes = market.get("outcomes") or []
     if isinstance(raw_outcomes, dict):
         raw_outcomes = raw_outcomes.get("edges") or []
@@ -762,10 +765,17 @@ def _market_lookup_result(market: dict) -> dict[str, object]:
             outcome = outcome["node"]
         if not isinstance(outcome, dict):
             continue
-        name = str(outcome.get("name") or outcome.get("outcome") or outcome.get("title") or "").strip()
+        name = str(
+            outcome.get("name") or outcome.get("outcome") or outcome.get("title") or ""
+        ).strip()
         name = {"是": "Yes", "否": "No"}.get(name, name)
-        if name and name not in outcomes:
-            outcomes.append(name)
+        raw_index_set = outcome.get("indexSet", outcome.get("index_set"))
+        try:
+            index_set = int(str(raw_index_set))
+        except (TypeError, ValueError):
+            index_set = {"YES": 1, "NO": 2}.get(name.upper())
+        if name and not any(item["name"] == name for item in outcomes):
+            outcomes.append({"name": name, "index_set": index_set})
     return {
         "id": str(market.get("id", "")),
         "title": str(market.get("title") or ""),

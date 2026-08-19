@@ -1101,7 +1101,7 @@ class PredictClient:
         Predict still exposes one YES-denominated orderbook: CTF indexSet 1 is
         the YES outcome and indexSet 2 is the complementary NO outcome.
         """
-        wanted = outcome_name.strip().casefold()
+        wanted_names = self._outcome_label_aliases(outcome_name)
         canonical = outcome_name.strip().upper()
         if canonical in {"YES", "NO"}:
             return canonical
@@ -1113,11 +1113,12 @@ class PredictClient:
             if not isinstance(outcome, dict):
                 continue
             names = {
-                str(outcome.get(key, "")).strip().casefold()
+                alias
                 for key in ("name", "outcome", "side", "title")
                 if outcome.get(key) not in (None, "")
+                for alias in self._outcome_label_aliases(str(outcome.get(key, "")))
             }
-            if not wanted or wanted not in names:
+            if not wanted_names or wanted_names.isdisjoint(names):
                 continue
 
             explicit_side = str(
@@ -1137,6 +1138,26 @@ class PredictClient:
                 return "NO"
             return None
         return None
+
+    @staticmethod
+    def _outcome_label_aliases(value: str) -> set[str]:
+        """Return exact labels plus safe localized Over/Under aliases."""
+        normalized = " ".join(value.strip().casefold().split())
+        if not normalized:
+            return set()
+        aliases = {normalized}
+        localized_prefixes = {
+            "大": "over",
+            "小": "under",
+            "超过": "over",
+            "低于": "under",
+        }
+        for localized, english in localized_prefixes.items():
+            if normalized == localized:
+                aliases.add(english)
+            elif normalized.startswith(f"{localized} "):
+                aliases.add(f"{english}{normalized[len(localized):]}")
+        return aliases
 
     def _tick_size_from_market(self, market: dict, market_id: str) -> Decimal:
         raw_precision = self._first_present(market, "decimalPrecision", "decimal_precision")

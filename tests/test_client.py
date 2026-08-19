@@ -115,6 +115,19 @@ def test_custom_outcome_labels_map_to_canonical_orderbook_sides() -> None:
     assert client.cached_outcome_side("818058", "HRTS") == "NO"
 
 
+def test_localized_over_under_labels_map_to_canonical_orderbook_sides() -> None:
+    client = PredictClient(Settings(), dry_run=False)
+    client._market_metadata["total-kills"] = {
+        "outcomes": [
+            {"name": "Over 55.5", "indexSet": 1},
+            {"name": "Under 55.5", "indexSet": 2},
+        ]
+    }
+
+    assert client.cached_outcome_side("total-kills", "大 55.5") == "YES"
+    assert client.cached_outcome_side("total-kills", "小 55.5") == "NO"
+
+
 def test_rest_request_matches_official_requests_usage() -> None:
     client = PredictClient(Settings(api_key="api-key"), dry_run=False)
     response = Mock(status_code=200, content=b'{"data":{"message":"hello"}}')

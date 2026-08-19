@@ -40,6 +40,7 @@ def test_build_config_text_supports_multiple_markets() -> None:
                 market_id="market-yes",
                 market_title='Will "Yes" win?',
                 outcome="YES",
+                outcome_index_set=1,
                 quote_size="1.0",
             ),
             MarketAnswers(market_id="market-no", outcome="NO", quote_size="2.0"),
@@ -49,6 +50,7 @@ def test_build_config_text_supports_multiple_markets() -> None:
     assert text.count("[[markets]]") == 2
     assert 'id = "market-yes"' in text
     assert 'title = "Will \\"Yes\\" win?"' in text
+    assert "outcome_index_set = 1" in text
     assert 'id = "market-no"' in text
     assert 'quote_size = "2.0"' in text
 

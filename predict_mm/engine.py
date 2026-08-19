@@ -117,6 +117,20 @@ class MarketMakerEngine:
         cached_title = getattr(self.client, "cached_market_title", None)
         return configured or (cached_title(market_id) if cached_title else "")
 
+    def _outcome_side(self, market: MarketConfig) -> str | None:
+        """Resolve the selected label without depending on its display language."""
+        if market.outcome_index_set is not None:
+            return {1: "YES", 2: "NO"}.get(market.outcome_index_set)
+        selected = market.outcome.strip().upper()
+        if selected in {"YES", "NO"}:
+            return selected
+        if selected in {"YES_NO", "YES&NO", "YES AND NO"}:
+            return "YES_NO"
+        resolve_outcome_side = getattr(self.client, "cached_outcome_side", None)
+        if callable(resolve_outcome_side):
+            return resolve_outcome_side(market.id, market.outcome)
+        return None
+
     def active_orders(self) -> list[dict[str, object]]:
         orders: list[dict[str, object]] = []
         for order in self.open_orders.values():
@@ -306,12 +320,9 @@ class MarketMakerEngine:
             orderbook = self._latest_orderbooks.get(market.id)
             if orderbook is None:
                 continue
-            outcome_side = None
-            resolve_outcome_side = getattr(self.client, "cached_outcome_side", None)
-            if callable(resolve_outcome_side):
-                outcome_side = resolve_outcome_side(market.id, market.outcome)
-                if outcome_side is None:
-                    continue
+            outcome_side = self._outcome_side(market)
+            if outcome_side is None:
+                continue
             quotes = self.strategy.build_quotes(
                 market,
                 orderbook,
@@ -344,18 +355,15 @@ class MarketMakerEngine:
                 self._market_tick_sizes[market.id] = orderbook.tick_size
             if self.config.replace_on_orderbook_change:
                 await self._cancel_orders_approached_by_market(market.id, orderbook)
-            outcome_side = None
-            resolve_outcome_side = getattr(self.client, "cached_outcome_side", None)
-            if callable(resolve_outcome_side):
-                outcome_side = resolve_outcome_side(market.id, market.outcome)
-                if outcome_side is None:
-                    logger.warning(
-                        "Unable to map outcome %s on %s to Predict's YES/NO orderbook; "
-                        "skipping this market for safety",
-                        market.outcome,
-                        market.id,
-                    )
-                    continue
+            outcome_side = self._outcome_side(market)
+            if outcome_side is None:
+                logger.warning(
+                    "Unable to map outcome %s on %s to Predict's YES/NO orderbook; "
+                    "skipping this market for safety",
+                    market.outcome,
+                    market.id,
+                )
+                continue
             quotes = self.strategy.build_quotes(
                 market,
                 orderbook,

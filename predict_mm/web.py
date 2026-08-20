@@ -523,6 +523,8 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
                 slug,
                 api_search_enabled=bool(settings.api_key),
             )
+            if settings.api_key and markets:
+                markets = await _enrich_market_outcome_indices(client, markets)
         except Exception as error:  # noqa: BLE001
             logging.getLogger("predict-mm").warning("无法从市场网址识别 ID: %s", error)
             raise HTTPException(
@@ -728,6 +730,29 @@ async def _resolve_markets_for_url(
             api_search_failed,
         )
     return [], "", api_search_failed
+
+
+async def _enrich_market_outcome_indices(
+    client: PredictClient,
+    markets: list[dict],
+) -> list[dict]:
+    """Add canonical outcome indices without discarding localized labels."""
+    logger = logging.getLogger("predict-mm")
+    semaphore = asyncio.Semaphore(5)
+
+    async def enrich(market: dict) -> dict:
+        async with semaphore:
+            try:
+                return await client.enrich_market_outcome_indices(market)
+            except Exception as error:  # noqa: BLE001
+                logger.warning(
+                    "无法为市场 %s 补全官方选项编号: %s",
+                    market.get("id"),
+                    error,
+                )
+                return market
+
+    return list(await asyncio.gather(*(enrich(market) for market in markets)))
 
 
 def _markets_matching_slug(markets: list[dict], slug: str) -> list[dict]:

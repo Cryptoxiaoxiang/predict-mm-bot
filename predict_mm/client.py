@@ -1090,6 +1090,30 @@ class PredictClient:
             self._market_metadata[market_id] = self._data(response)
         return self._market_metadata[market_id]
 
+    async def enrich_market_outcome_indices(self, market: dict) -> dict:
+        """Attach official indexSet values to localized public-page outcomes."""
+        market_id = str(market.get("id") or "")
+        if not market_id:
+            return market
+        await self._get_market_metadata(market_id)
+        raw_outcomes = market.get("outcomes") or []
+        if isinstance(raw_outcomes, dict):
+            raw_outcomes = raw_outcomes.get("edges") or []
+        for raw_outcome in raw_outcomes:
+            outcome = raw_outcome
+            if isinstance(outcome, dict) and isinstance(outcome.get("node"), dict):
+                outcome = outcome["node"]
+            if not isinstance(outcome, dict):
+                continue
+            if self._first_present(outcome, "indexSet", "index_set") not in (None, ""):
+                continue
+            label = self._outcome_name(outcome).strip()
+            side = self.cached_outcome_side(market_id, label)
+            index_set = {"YES": 1, "NO": 2}.get(side or "")
+            if index_set is not None:
+                outcome["indexSet"] = index_set
+        return market
+
     def cached_market_title(self, market_id: str) -> str:
         """Return a user-facing title for market metadata already fetched by the engine."""
         market = self._market_metadata.get(market_id) or {}
@@ -1117,12 +1141,7 @@ class PredictClient:
         for outcome in market.get("outcomes") or []:
             if not isinstance(outcome, dict):
                 continue
-            names = {
-                alias
-                for key in ("name", "outcome", "side", "title")
-                if outcome.get(key) not in (None, "")
-                for alias in self._outcome_label_aliases(str(outcome.get(key, "")))
-            }
+            names = self._outcome_metadata_aliases(outcome)
             if not wanted_names or wanted_names.isdisjoint(names):
                 continue
 
@@ -1162,6 +1181,45 @@ class PredictClient:
                 aliases.add(english)
             elif normalized.startswith(f"{localized} "):
                 aliases.add(f"{english}{normalized[len(localized):]}")
+        return aliases
+
+    def _outcome_metadata_aliases(self, outcome: dict) -> set[str]:
+        aliases = {
+            alias
+            for key in ("name", "outcome", "side", "title")
+            if outcome.get(key) not in (None, "")
+            for alias in self._outcome_label_aliases(str(outcome.get(key, "")))
+        }
+        for container_key in (
+            "team",
+            "participant",
+            "competitor",
+            "variantData",
+            "variantDetails",
+        ):
+            container = outcome.get(container_key)
+            if isinstance(container, dict):
+                aliases.update(
+                    alias
+                    for key in (
+                        "name",
+                        "title",
+                        "shortName",
+                        "short_name",
+                        "displayName",
+                        "display_name",
+                        "teamName",
+                        "team_name",
+                        "abbreviation",
+                        "code",
+                        "label",
+                        "value",
+                    )
+                    if container.get(key) not in (None, "")
+                    for alias in self._outcome_label_aliases(str(container.get(key, "")))
+                )
+            elif container not in (None, ""):
+                aliases.update(self._outcome_label_aliases(str(container)))
         return aliases
 
     def _tick_size_from_market(self, market: dict, market_id: str) -> Decimal:
@@ -1532,12 +1590,7 @@ class PredictClient:
                     if explicit_side != canonical_side:
                         continue
             else:
-                names = {
-                    alias
-                    for key in ("name", "outcome", "side", "title")
-                    if outcome.get(key) not in (None, "")
-                    for alias in self._outcome_label_aliases(str(outcome.get(key, "")))
-                }
+                names = self._outcome_metadata_aliases(outcome)
                 if not wanted_names or wanted_names.isdisjoint(names):
                     continue
             token_id = self._extract_token_id(outcome)

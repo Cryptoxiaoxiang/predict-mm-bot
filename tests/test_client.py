@@ -115,6 +115,62 @@ def test_custom_outcome_labels_map_to_canonical_orderbook_sides() -> None:
     assert client.cached_outcome_side("818058", "HRTS") == "NO"
 
 
+def test_full_team_names_map_to_abbreviated_official_outcomes() -> None:
+    client = PredictClient(Settings(), dry_run=False)
+    client._market_metadata["1541206"] = {
+        "outcomes": [
+            {
+                "name": "TS",
+                "indexSet": 1,
+                "team": {"name": "Team Spirit", "abbreviation": "TS"},
+            },
+            {
+                "name": "VSN",
+                "indexSet": 2,
+                "team": {"name": "TEAM VISION", "abbreviation": "VSN"},
+            },
+        ]
+    }
+
+    assert client.cached_outcome_side("1541206", "Team Spirit") == "YES"
+    assert client.cached_outcome_side("1541206", "TEAM VISION") == "NO"
+
+
+def test_localized_market_outcomes_are_enriched_with_official_indices() -> None:
+    class StubClient(PredictClient):
+        async def _request(self, method, path, payload=None, query=None):  # type: ignore[no-untyped-def]
+            assert (method, path) == ("GET", "/v1/markets/1541223")
+            return {
+                "data": {
+                    "outcomes": [
+                        {
+                            "name": "IRON",
+                            "indexSet": 1,
+                            "team": {"name": "Iron Wing"},
+                        },
+                        {
+                            "name": "BOOM",
+                            "indexSet": 2,
+                            "team": {"name": "BoomBoys"},
+                        },
+                    ]
+                }
+            }
+
+    client = StubClient(Settings(api_key="api-key"), dry_run=False)
+    localized_market = {
+        "id": "1541223",
+        "outcomes": [{"name": "Iron Wing"}, {"name": "BoomBoys"}],
+    }
+
+    enriched = asyncio.run(client.enrich_market_outcome_indices(localized_market))
+
+    assert enriched["outcomes"] == [
+        {"name": "Iron Wing", "indexSet": 1},
+        {"name": "BoomBoys", "indexSet": 2},
+    ]
+
+
 def test_localized_over_under_labels_map_to_canonical_orderbook_sides() -> None:
     client = PredictClient(Settings(), dry_run=False)
     client._market_metadata["total-kills"] = {

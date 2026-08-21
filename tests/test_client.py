@@ -184,6 +184,63 @@ def test_localized_over_under_labels_map_to_canonical_orderbook_sides() -> None:
     assert client.cached_outcome_side("total-kills", "小 55.5") == "NO"
 
 
+def test_localized_direction_and_usd_labels_map_to_official_outcomes() -> None:
+    client = PredictClient(Settings(), dry_run=False)
+    client._market_metadata.update(
+        {
+            "1607153": {
+                "outcomes": [
+                    {"name": "Up", "indexSet": 1},
+                    {"name": "Down", "indexSet": 2},
+                ]
+            },
+            "52261": {
+                "outcomes": [
+                    {"name": "$400", "indexSet": 1},
+                    {"name": "$3,000", "indexSet": 2},
+                ]
+            },
+            "142932": {
+                "outcomes": [
+                    {"name": "$400", "indexSet": 1},
+                    {"name": "$800", "indexSet": 2},
+                ]
+            },
+        }
+    )
+
+    assert client.cached_outcome_side("1607153", "跌") == "NO"
+    assert client.cached_outcome_side("52261", "3,000美元") == "NO"
+    assert client.cached_outcome_side("142932", "$$800") == "NO"
+
+
+def test_localized_direction_and_usd_outcomes_are_enriched_with_indices() -> None:
+    class StubClient(PredictClient):
+        async def _request(self, method, path, payload=None, query=None):  # type: ignore[no-untyped-def]
+            assert (method, path) == ("GET", "/v1/markets/52261")
+            return {
+                "data": {
+                    "outcomes": [
+                        {"name": "$400", "indexSet": 1},
+                        {"name": "$3,000", "indexSet": 2},
+                    ]
+                }
+            }
+
+    client = StubClient(Settings(api_key="api-key"), dry_run=False)
+    localized_market = {
+        "id": "52261",
+        "outcomes": [{"name": "$400"}, {"name": "3,000美元"}],
+    }
+
+    enriched = asyncio.run(client.enrich_market_outcome_indices(localized_market))
+
+    assert enriched["outcomes"] == [
+        {"name": "$400", "indexSet": 1},
+        {"name": "3,000美元", "indexSet": 2},
+    ]
+
+
 def test_rest_request_matches_official_requests_usage() -> None:
     client = PredictClient(Settings(api_key="api-key"), dry_run=False)
     response = Mock(status_code=200, content=b'{"data":{"message":"hello"}}')

@@ -1165,11 +1165,24 @@ class PredictClient:
 
     @staticmethod
     def _outcome_label_aliases(value: str) -> set[str]:
-        """Return exact labels plus safe localized Over/Under aliases."""
+        """Return exact labels plus safe aliases for localized outcome text."""
         normalized = " ".join(value.strip().casefold().split())
         if not normalized:
             return set()
         aliases = {normalized}
+
+        direction_aliases = {
+            "涨": "up",
+            "上涨": "up",
+            "上升": "up",
+            "跌": "down",
+            "下跌": "down",
+            "下降": "down",
+        }
+        direction = direction_aliases.get(normalized)
+        if direction:
+            aliases.add(direction)
+
         localized_prefixes = {
             "大": "over",
             "小": "under",
@@ -1181,7 +1194,41 @@ class PredictClient:
                 aliases.add(english)
             elif normalized.startswith(f"{localized} "):
                 aliases.add(f"{english}{normalized[len(localized):]}")
+
+        usd_value = PredictClient._normalized_usd_outcome_value(normalized)
+        if usd_value is not None:
+            aliases.add(f"usd:{usd_value}")
         return aliases
+
+    @staticmethod
+    def _normalized_usd_outcome_value(value: str) -> str | None:
+        """Normalize equivalent USD labels without guessing across currencies.
+
+        Predict's localized pages can render ``$3,000`` as ``3,000美元`` and
+        occasionally include a duplicate dollar sign.  Only labels that
+        explicitly identify USD are normalized so unrelated numeric outcomes
+        cannot collide.
+        """
+        compact = "".join(value.strip().casefold().split())
+        number = ""
+        if compact.startswith("us$"):
+            number = compact[3:]
+        elif compact.startswith("$"):
+            number = compact.lstrip("$")
+        else:
+            for suffix in ("美元", "usd", "usdollars", "usdollar", "dollars", "dollar"):
+                if compact.endswith(suffix):
+                    number = compact[: -len(suffix)]
+                    break
+        if not number or not re.fullmatch(r"[0-9][0-9,]*(?:\.[0-9]+)?", number):
+            return None
+        try:
+            amount = Decimal(number.replace(",", ""))
+        except ArithmeticError:
+            return None
+        if not amount.is_finite():
+            return None
+        return format(amount.normalize(), "f")
 
     def _outcome_metadata_aliases(self, outcome: dict) -> set[str]:
         aliases = {

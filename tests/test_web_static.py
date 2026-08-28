@@ -68,3 +68,13 @@ def test_new_market_quote_size_defaults_to_one_hundred() -> None:
 
     assert 'data-field="quote_size" inputmode="decimal" value="100"' in html
     assert "market.quote_size || '100'" in javascript
+
+
+def test_selected_market_summary_shows_market_id_on_its_own_line() -> None:
+    static_dir = Path(__file__).parents[1] / "predict_mm" / "web_static"
+    javascript = (static_dir / "app.js").read_text(encoding="utf-8")
+    stylesheet = (static_dir / "styles.css").read_text(encoding="utf-8")
+
+    assert "identifier.textContent = `Market ID：${marketId}`" in javascript
+    assert "summary.replaceChildren(selection, identifier)" in javascript
+    assert ".selected-market-id { display: block;" in stylesheet

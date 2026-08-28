@@ -1098,6 +1098,118 @@ def test_approached_no_buy_uses_complementary_yes_ask() -> None:
     assert client.cancelled == ["old-no-buy"]
 
 
+def test_minimum_tick_buy_is_kept_while_spread_is_only_one_tick() -> None:
+    client = RepriceClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+    engine.open_orders["floor-buy"] = ManagedOrder(
+        order_id="floor-buy",
+        quote=Quote("market-1", Side.BUY, Decimal("0.001"), Decimal("100")),
+        created_at=monotonic(),
+    )
+    one_tick_book = OrderBook(
+        market_id="market-1",
+        bids=[Level(Decimal("0.001"), Decimal("100"))],
+        asks=[Level(Decimal("0.002"), Decimal("100"))],
+        tick_size=Decimal("0.001"),
+    )
+
+    asyncio.run(engine._cancel_orders_approached_by_market("market-1", one_tick_book))
+
+    assert client.cancelled == []
+
+
+def test_minimum_tick_no_buy_is_kept_while_spread_is_only_one_tick() -> None:
+    client = RepriceClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[MarketConfig(id="market-1", outcome="NO")]),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+    engine.open_orders["floor-no-buy"] = ManagedOrder(
+        order_id="floor-no-buy",
+        quote=Quote(
+            "market-1",
+            Side.BUY,
+            Decimal("0.001"),
+            Decimal("100"),
+            "No",
+            outcome_side="NO",
+        ),
+        created_at=monotonic(),
+    )
+    one_tick_book = OrderBook(
+        market_id="market-1",
+        bids=[Level(Decimal("0.998"), Decimal("100"))],
+        asks=[Level(Decimal("0.999"), Decimal("100"))],
+        tick_size=Decimal("0.001"),
+    )
+
+    asyncio.run(engine._cancel_orders_approached_by_market("market-1", one_tick_book))
+
+    assert client.cancelled == []
+
+
+def test_minimum_tick_buy_resumes_normal_replacement_after_spread_widens() -> None:
+    client = RepriceClient()
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        client=client,  # type: ignore[arg-type]
+        strategy=PassiveMakerStrategy(StrategyConfig()),
+        risk=RiskManager(RiskConfig()),
+    )
+    engine.open_orders["floor-buy"] = ManagedOrder(
+        order_id="floor-buy",
+        quote=Quote("market-1", Side.BUY, Decimal("0.001"), Decimal("100")),
+        created_at=monotonic(),
+    )
+    wider_book = OrderBook(
+        market_id="market-1",
+        bids=[Level(Decimal("0.001"), Decimal("100"))],
+        asks=[Level(Decimal("0.003"), Decimal("100"))],
+        tick_size=Decimal("0.001"),
+    )
+
+    asyncio.run(engine._cancel_orders_approached_by_market("market-1", wider_book))
+
+    assert client.cancelled == ["floor-buy"]
+
+
+def test_minimum_tick_buy_ignores_lifetime_until_spread_widens() -> None:
+    client = RepriceClient()
+    market = MarketConfig(id="market-1")
+    strategy = PassiveMakerStrategy(StrategyConfig())
+    engine = MarketMakerEngine(
+        config=BotConfig(markets=[market], cancel_after_seconds=60),
+        client=client,  # type: ignore[arg-type]
+        strategy=strategy,
+        risk=RiskManager(RiskConfig()),
+    )
+    order = ManagedOrder(
+        order_id="floor-buy",
+        quote=Quote("market-1", Side.BUY, Decimal("0.001"), Decimal("100")),
+        created_at=monotonic() - 180,
+    )
+    engine.open_orders[order.order_id] = order
+    one_tick_book = OrderBook(
+        market_id="market-1",
+        bids=[Level(Decimal("0.001"), Decimal("100"))],
+        asks=[Level(Decimal("0.002"), Decimal("100"))],
+        tick_size=Decimal("0.001"),
+    )
+    target_quotes = strategy.build_quotes(market, one_tick_book)
+
+    asyncio.run(engine._manage_order_lifetimes(market, one_tick_book, target_quotes))
+
+    assert client.cancelled == []
+    assert order.status == OrderStatus.OPEN
+
+
 def test_approached_custom_no_buy_uses_canonical_outcome_side() -> None:
     client = RepriceClient()
     engine = MarketMakerEngine(

@@ -258,11 +258,17 @@ function updateSelectedMarket(row) {
   const title = row.dataset.marketTitle || '';
   if (!title) {
     summary.hidden = true;
-    summary.textContent = '';
+    summary.replaceChildren();
     return;
   }
   const outcome = row.querySelector('[data-field="outcome"]').value;
-  summary.textContent = `已选择：${title} · ${selectedOutcomeLabel(outcome)}`;
+  const marketId = row.querySelector('[data-field="market_id"]').value.trim();
+  const selection = document.createElement('span');
+  selection.textContent = `已选择：${title} · ${selectedOutcomeLabel(outcome)}`;
+  const identifier = document.createElement('span');
+  identifier.className = 'selected-market-id';
+  identifier.textContent = `Market ID：${marketId}`;
+  summary.replaceChildren(selection, identifier);
   summary.hidden = false;
 }
 

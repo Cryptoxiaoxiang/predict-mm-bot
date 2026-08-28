@@ -747,6 +747,9 @@ class MarketMakerEngine:
                     continue
                 touch_price = best_price.price
 
+            if self._minimum_tick_buy_is_pinned(order, orderbook, tick_size):
+                continue
+
             is_approached = (
                 touch_price <= order.quote.price + tick_size
                 if order.quote.side == Side.BUY
@@ -763,6 +766,33 @@ class MarketMakerEngine:
                 touch_price,
             )
             await self._cancel_order_safely(order)
+
+    @staticmethod
+    def _minimum_tick_buy_is_pinned(
+        order: ManagedOrder,
+        orderbook: OrderBook,
+        tick_size: Decimal,
+    ) -> bool:
+        """Keep an unmovable floor quote until its one-tick spread widens."""
+        if (
+            order.quote.side != Side.BUY
+            or order.quote.price != tick_size
+            or orderbook.spread is None
+            or orderbook.spread > tick_size
+        ):
+            return False
+        canonical_outcome = (
+            order.quote.outcome_side or order.quote.outcome
+        ).strip().upper()
+        if canonical_outcome == "NO":
+            touch_price = (
+                Decimal("1") - orderbook.best_ask.price
+                if orderbook.best_ask is not None
+                else None
+            )
+        else:
+            touch_price = orderbook.best_bid.price if orderbook.best_bid is not None else None
+        return touch_price == tick_size
 
     async def _manage_order_lifetimes(
         self,
@@ -782,6 +812,9 @@ class MarketMakerEngine:
                 or order.is_emergency_exit
                 or not self._order_matches_market_config(order, market)
             ):
+                continue
+            tick_size = orderbook.tick_size or self.config.strategy.tick_size
+            if self._minimum_tick_buy_is_pinned(order, orderbook, tick_size):
                 continue
             if order.age_seconds < lifetime:
                 continue

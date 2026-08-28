@@ -72,9 +72,12 @@ def test_new_market_quote_size_defaults_to_one_hundred() -> None:
 
 def test_selected_market_summary_shows_market_id_on_its_own_line() -> None:
     static_dir = Path(__file__).parents[1] / "predict_mm" / "web_static"
+    html = (static_dir / "index.html").read_text(encoding="utf-8")
     javascript = (static_dir / "app.js").read_text(encoding="utf-8")
     stylesheet = (static_dir / "styles.css").read_text(encoding="utf-8")
 
     assert "identifier.textContent = `Market ID：${marketId}`" in javascript
     assert "summary.replaceChildren(selection, identifier)" in javascript
     assert ".selected-market-id { display: block;" in stylesheet
+    assert '/static/app.js?v=20260828-market-id' in html
+    assert '/static/styles.css?v=20260828-market-id' in html

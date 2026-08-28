@@ -98,6 +98,34 @@ def test_strategy_accepts_one_tick_spread_when_quote_stays_away() -> None:
     assert [quote.price for quote in quotes] == [Decimal("0.249")]
 
 
+def test_strategy_quotes_at_lowest_tick_when_two_tick_edge_has_no_room() -> None:
+    strategy = PassiveMakerStrategy(StrategyConfig(min_edge_ticks=2))
+    book = OrderBook(
+        market_id="m1",
+        bids=[Level(Decimal("0.001"), Decimal("100"))],
+        asks=[Level(Decimal("0.002"), Decimal("100"))],
+        tick_size=Decimal("0.001"),
+    )
+
+    quotes = strategy.build_quotes(MarketConfig(id="m1", outcome="YES"), book)
+
+    assert [quote.price for quote in quotes] == [Decimal("0.001")]
+
+
+def test_strategy_quotes_no_at_lowest_tick_when_two_tick_edge_has_no_room() -> None:
+    strategy = PassiveMakerStrategy(StrategyConfig(min_edge_ticks=2))
+    book = OrderBook(
+        market_id="m1",
+        bids=[Level(Decimal("0.998"), Decimal("100"))],
+        asks=[Level(Decimal("0.999"), Decimal("100"))],
+        tick_size=Decimal("0.001"),
+    )
+
+    quotes = strategy.build_quotes(MarketConfig(id="m1", outcome="NO"), book)
+
+    assert [quote.price for quote in quotes] == [Decimal("0.001")]
+
+
 def test_strategy_uses_market_tick_size() -> None:
     strategy = PassiveMakerStrategy(
         StrategyConfig(tick_size=Decimal("0.001"), quote_size=Decimal("1"), min_edge_ticks=2)

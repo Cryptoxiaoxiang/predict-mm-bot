@@ -41,13 +41,24 @@ class PassiveMakerStrategy:
             raw_bid = best_bid.price - edge
             raw_ask = best_ask.price + edge
 
+        # At the bottom of a 0.001-tick book there may be no room to move the
+        # configured two ticks away from the touch.  Keep a valid maker quote
+        # at the lowest market tick instead of dropping the market entirely.
+        # This is the 0.1-cent price shown by Predict.fun.
+        if raw_bid < tick_size and best_bid.price >= tick_size:
+            raw_bid = tick_size
+
         bid = quantize_price(raw_bid, tick_size, Side.BUY)
         ask = quantize_price(raw_ask, tick_size, Side.SELL)
         # Predict's orderbook is always expressed in YES prices.  A NO bid is
         # therefore the complement of the YES ask, not the YES ask itself.
         # Quantize again at the market precision to avoid Decimal values that
         # the backend cannot represent.
-        no_bid = quantize_price(Decimal("1") - ask, tick_size, Side.BUY)
+        raw_no_bid = Decimal("1") - ask
+        current_no_bid = Decimal("1") - best_ask.price
+        if raw_no_bid < tick_size and current_no_bid >= tick_size:
+            raw_no_bid = tick_size
+        no_bid = quantize_price(raw_no_bid, tick_size, Side.BUY)
 
         quote_size = market.quote_size or self.config.quote_size
 

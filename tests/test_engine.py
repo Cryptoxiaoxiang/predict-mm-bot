@@ -27,9 +27,14 @@ class EmergencyClient:
     async def cancel_all_orders(self, market_id: str) -> None:
         self.cancelled_markets.append(market_id)
 
-    async def create_order(self, quote: Quote, *, post_only: bool = True) -> ManagedOrder:
+    async def cancel_market_buy_orders(self, market_id: str) -> None:
+        await self.cancel_all_orders(market_id)
+
+    async def create_order(self, quote: Quote, *, post_only: bool = True, exit_context=None) -> ManagedOrder:
         self.created.append((quote, post_only))
-        return ManagedOrder(order_id="emergency-exit", quote=quote, created_at=0)
+        return ManagedOrder(order_id="emergency-exit", quote=quote, created_at=0,
+                            status=OrderStatus.FILLED, filled_size=quote.size,
+                            exit_context=exit_context)
 
     async def get_orderbook(self, market_id: str) -> OrderBook:
         return OrderBook(market_id, bids=[], asks=[], tick_size=self.tick_size)
@@ -39,6 +44,8 @@ async def handle_fill_and_wait(engine: MarketMakerEngine, event: WalletFillEvent
     await engine._handle_wallet_fill(event)
     if engine._emergency_tasks:
         await asyncio.gather(*engine._emergency_tasks)
+    if engine._emergency_cancel_tasks:
+        await asyncio.gather(*engine._emergency_cancel_tasks.values())
 
 
 def test_buy_fill_cancels_market_and_creates_emergency_sell() -> None:
@@ -219,6 +226,7 @@ def test_failed_submitted_cancel_is_retried_before_emergency_sell() -> None:
                 event_type="orderTransactionSubmitted",
             )
         )
+        await asyncio.gather(*engine._emergency_cancel_tasks.values())
         await handle_fill_and_wait(
             engine,
             WalletFillEvent(
@@ -1501,13 +1509,13 @@ def test_emergency_sell_retries_when_settled_shares_are_not_yet_available(caplog
             super().__init__()
             self.attempts = 0
 
-        async def create_order(self, quote: Quote, *, post_only: bool = True) -> ManagedOrder:
+        async def create_order(self, quote: Quote, *, post_only: bool = True, exit_context=None) -> ManagedOrder:
             self.attempts += 1
             if self.attempts == 1:
                 raise RuntimeError(
                     "HTTP 400: Insufficient shares: token balance is less than the total ask amount."
                 )
-            return await super().create_order(quote, post_only=post_only)
+            return await super().create_order(quote, post_only=post_only, exit_context=exit_context)
 
     client = DelayedSharesClient()
     engine = MarketMakerEngine(

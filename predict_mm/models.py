@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_DOWN, ROUND_UP
 from enum import StrEnum
 from time import monotonic
@@ -17,6 +17,8 @@ class OrderStatus(StrEnum):
     FILLED = "filled"
     CANCELED = "canceled"
     UNKNOWN = "unknown"
+    EXPIRED = "expired"
+    REJECTED = "rejected"
 
 
 @dataclass(frozen=True)
@@ -61,6 +63,14 @@ class Quote:
     outcome_side: str | None = None
 
 
+@dataclass(frozen=True)
+class ExitContext:
+    group_id: str
+    source_order_id: str
+    target_size: Decimal
+    sold_before: Decimal = Decimal("0")
+
+
 @dataclass
 class ManagedOrder:
     order_id: str
@@ -70,6 +80,8 @@ class ManagedOrder:
     order_hash: str | None = None
     filled_size: Decimal = Decimal("0")
     is_emergency_exit: bool = False
+    exit_context: ExitContext | None = None
+    expires_at: float | None = None
 
     @property
     def age_seconds(self) -> float:
@@ -88,6 +100,9 @@ class WalletFillEvent:
     outcome: str | None = None
     price: Decimal | None = None
     order_size: Decimal | None = None
+    received_at: float = field(default_factory=monotonic)
+    event_timestamp_ms: int | None = None
+    cumulative_filled_size: Decimal | None = None
 
 
 @dataclass(frozen=True)

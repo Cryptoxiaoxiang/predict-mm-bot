@@ -20,6 +20,7 @@ import requests
 
 from predict_mm.config import Settings
 from predict_mm.models import (
+    ExitContext,
     Level,
     ManagedOrder,
     OrderBook,
@@ -39,6 +40,14 @@ class PredictAuthorizationError(RuntimeError):
 
 class PredictTransientError(RuntimeError):
     """Predict temporarily rejected a request that is safe to retry."""
+
+
+class PredictOrderSubmissionUnknown(RuntimeError):
+    """The POST may have succeeded. Reconcile this hash before creating another order."""
+
+    def __init__(self, order: ManagedOrder) -> None:
+        self.order = order
+        super().__init__(f"Emergency order submission uncertain; reconcile hash {order.order_hash}")
 
 
 class PredictClient:
@@ -387,6 +396,7 @@ class PredictClient:
             )
             return None
         raw_status = str(data.get("status") or "UNKNOWN").strip().lower()
+        raw_status = {"cancelled": "canceled"}.get(raw_status, raw_status)
         try:
             status = OrderStatus(raw_status)
         except ValueError:
@@ -415,9 +425,13 @@ class PredictClient:
             created_at=monotonic(),
             status=status,
             filled_size=filled_size,
+            expires_at=float(order_data["expiration"]) if order_data.get("expiration") else None,
         )
 
-    async def create_order(self, quote: Quote, *, post_only: bool = True) -> ManagedOrder:
+    async def create_order(
+        self, quote: Quote, *, post_only: bool = True,
+        exit_context: ExitContext | None = None,
+    ) -> ManagedOrder:
         if self.dry_run:
             order = ManagedOrder(order_id=f"dry-{uuid4().hex[:12]}", quote=quote, created_at=monotonic())
             self._dry_orders[order.order_id] = order
@@ -439,7 +453,31 @@ class PredictClient:
         signed_order_payload = await asyncio.to_thread(
             self._build_signed_limit_order_payload, quote, post_only
         )
-        response = await self._request("POST", "/v1/orders", signed_order_payload)
+        signed_order = signed_order_payload["data"]["order"]
+        order_hash = str(signed_order.get("hash") or "")
+        intent = ManagedOrder(
+            order_id=order_hash, order_hash=order_hash or None, quote=quote,
+            created_at=monotonic(), status=OrderStatus.UNKNOWN,
+            is_emergency_exit=not post_only, exit_context=exit_context,
+            expires_at=float(signed_order["expiration"]),
+        )
+        if not post_only:
+            if not order_hash:
+                raise RuntimeError("Emergency order must have a hash before submission")
+            # Persist BEFORE the POST: a timeout or restart must not lose the
+            # signed order identity and accidentally produce a second sell.
+            self.persist_tracked_order(intent)
+        try:
+            response = await self._request("POST", "/v1/orders", signed_order_payload)
+        except (requests.RequestException, PredictTransientError) as error:
+            if not post_only:
+                raise PredictOrderSubmissionUnknown(intent) from error
+            raise
+        except RuntimeError:
+            if not post_only:
+                intent.status = OrderStatus.REJECTED
+                self.persist_tracked_order(intent)
+            raise
         data = self._data(response)
         order_id = str(
             data.get("orderId")
@@ -448,7 +486,8 @@ class PredictClient:
             or data.get("orderHash")
             or data.get("order_hash")
         )
-        signed_order = signed_order_payload["data"]["order"]
+        if not post_only and order_id == "None":
+            raise PredictOrderSubmissionUnknown(intent)
         managed_order = ManagedOrder(
             order_id=order_id,
             quote=quote,
@@ -463,6 +502,9 @@ class PredictClient:
                 or ""
             )
             or None,
+            is_emergency_exit=not post_only,
+            exit_context=exit_context,
+            expires_at=intent.expires_at,
         )
         self.persist_tracked_order(managed_order)
         display_side, display_outcome = self._display_order_intent(
@@ -674,6 +716,20 @@ class PredictClient:
             batch = open_order_ids[start : start + 100]
             await self._request("POST", "/v1/orders/remove", {"data": {"ids": batch}})
 
+    async def cancel_market_buy_orders(self, market_id: str) -> None:
+        """Emergency cleanup must never cancel an exit sell submitted concurrently."""
+        if self.dry_run:
+            for order in self._dry_orders.values():
+                if order.quote.market_id == market_id and order.quote.side == Side.BUY:
+                    order.status = OrderStatus.CANCELED
+            return
+        rows = await self._all_order_rows({"status": "OPEN"})
+        ids = [str(row["id"]) for row in rows
+               if str(row.get("marketId")) == market_id
+               and self._order_side((row.get("order") or {}).get("side")) == Side.BUY]
+        for start in range(0, len(ids), 100):
+            await self._request("POST", "/v1/orders/remove", {"data": {"ids": ids[start:start + 100]}})
+
     async def _get_open_order_ids(self, market_id: str | None = None) -> list[str]:
         query: dict[str, object] = {"first": 100, "status": "OPEN"}
         if market_id is not None:
@@ -731,6 +787,7 @@ class PredictClient:
         for record in records:
             try:
                 quote_data = record["quote"]
+                context = record.get("exit_context")
                 restored.append(
                     ManagedOrder(
                         order_id=str(record["order_id"]),
@@ -751,6 +808,13 @@ class PredictClient:
                         status=OrderStatus(str(record.get("status") or "unknown")),
                         filled_size=Decimal(str(record.get("filled_size") or "0")),
                         is_emergency_exit=bool(record.get("is_emergency_exit", False)),
+                        expires_at=record.get("expires_at"),
+                        exit_context=ExitContext(
+                            group_id=context["group_id"],
+                            source_order_id=context["source_order_id"],
+                            target_size=Decimal(context["target_size"]),
+                            sold_before=Decimal(context["sold_before"]),
+                        ) if context else None,
                     )
                 )
             except (KeyError, TypeError, ValueError) as error:
@@ -770,12 +834,22 @@ class PredictClient:
                         existing[str(record["order_id"])] = record
             except (OSError, ValueError):
                 existing = {}
+        # Replace the pre-POST hash-keyed intent when the numeric ID is known.
+        if order.order_hash and order.order_hash != order.order_id:
+            existing.pop(order.order_hash, None)
         existing[order.order_id] = {
             "order_id": order.order_id,
             "order_hash": order.order_hash,
             "status": order.status.value,
             "filled_size": str(order.filled_size),
             "is_emergency_exit": order.is_emergency_exit,
+            "expires_at": order.expires_at,
+            "exit_context": {
+                "group_id": order.exit_context.group_id,
+                "source_order_id": order.exit_context.source_order_id,
+                "target_size": str(order.exit_context.target_size),
+                "sold_before": str(order.exit_context.sold_before),
+            } if order.exit_context else None,
             "quote": {
                 "market_id": order.quote.market_id,
                 "side": order.quote.side.value,
@@ -789,7 +863,22 @@ class PredictClient:
                 "outcome_side": order.quote.outcome_side,
             },
         }
-        records = list(existing.values())[-500:]
+        # Retain the latest attempt for each exit even during large quote batches.
+        exits: dict[str, dict] = {}
+        for record in existing.values():
+            context = record.get("exit_context")
+            if context:
+                exits[context["group_id"]] = record
+        # Drop superseded attempts before pruning. Otherwise an old expired leg
+        # could reappear as the latest exit after its completed replacement ages out.
+        records = [record for record in existing.values()
+                   if not record.get("exit_context")
+                   or exits[record["exit_context"]["group_id"]] is record][-500:]
+        retained = {record["order_id"]: record for record in records}
+        for record in exits.values():
+            if record.get("status") != OrderStatus.FILLED.value:
+                retained[record["order_id"]] = record
+        records = list(retained.values())
         self._order_journal_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self._order_journal_path.with_suffix(
             self._order_journal_path.suffix + ".tmp"
@@ -1367,7 +1456,7 @@ class PredictClient:
         # Submitted lets the engine halt and cancel quotes immediately. It must
         # not sell until Success because the bought shares are only available
         # after the on-chain settlement has succeeded.
-        if event_type not in {"orderTransactionSubmitted", "orderTransactionSuccess"}:
+        if event_type not in {"orderTransactionSubmitted", "orderTransactionSuccess", "orderTransactionFailed"}:
             return None
         fill = message.get("fill") or (message.get("details") or {}).get("fill") or {}
         size_wei = fill.get("executedSizeWei")
@@ -1381,6 +1470,7 @@ class PredictClient:
             filled_size=Decimal(str(size_wei)) / Decimal(10**18),
             settlement_id=str(message.get("settlementId") or "") or None,
             event_type=event_type,
+            event_timestamp_ms=message.get("timestamp"),
             **context,
         )
 

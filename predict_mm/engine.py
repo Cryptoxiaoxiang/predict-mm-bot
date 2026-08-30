@@ -10,10 +10,12 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from time import monotonic
+from uuid import uuid4
 
-from predict_mm.client import PredictClient
+from predict_mm.client import PredictClient, PredictOrderSubmissionUnknown
 from predict_mm.config import BotConfig, MarketConfig
 from predict_mm.models import (
+    ExitContext,
     ManagedOrder,
     OrderBook,
     OrderStatus,
@@ -61,8 +63,21 @@ class MarketMakerEngine:
             WalletFillEvent | WalletOrderStatusEvent | OrderBook
         ] = asyncio.Queue()
         self._wallet_task: asyncio.Task[None] | None = None
+        self._wallet_events: asyncio.PriorityQueue[
+            tuple[int, int, WalletFillEvent | WalletOrderStatusEvent]
+        ] = asyncio.PriorityQueue()
+        self._wallet_event_sequence = 0
+        self._wallet_processor_task: asyncio.Task[None] | None = None
         self._orderbook_task: asyncio.Task[None] | None = None
         self._emergency_tasks: set[asyncio.Task[None]] = set()
+        self._emergency_cancel_tasks: dict[str, asyncio.Task[None]] = {}
+        self._fill_locks: dict[str, asyncio.Lock] = {}
+        self._exit_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._wallet_fill_totals: dict[str, Decimal] = {}
+        self._pending_sell_settlements: dict[str, set[str]] = {}
+        self._exit_wakeups: dict[str, asyncio.Event] = {}
+        self._match_received_at: dict[str, float] = {}
+        self._exit_poll_seconds = 0.5
         self._halted_markets: set[str] = set()
         self._prepared_emergency_markets: set[str] = set()
         self._submitted_fill_settlements: set[str] = set()
@@ -169,7 +184,9 @@ class MarketMakerEngine:
 
             if not self.config.dry_run:
                 self._wallet_task = asyncio.create_task(self._watch_wallet_fills())
+                self._wallet_processor_task = asyncio.create_task(self._process_wallet_events())
                 self._orderbook_task = asyncio.create_task(self._watch_active_orderbooks())
+                self._resume_emergency_exits()
 
             if self._run_deadline is not None:
                 logger.info(
@@ -219,14 +236,21 @@ class MarketMakerEngine:
                 self._wallet_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await self._wallet_task
+            if self._wallet_processor_task is not None:
+                self._wallet_processor_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self._wallet_processor_task
             if self._orderbook_task is not None:
                 self._orderbook_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await self._orderbook_task
-            for task in self._emergency_tasks:
+            for task in list(self._emergency_tasks):
                 task.cancel()
             if self._emergency_tasks:
                 await asyncio.gather(*self._emergency_tasks, return_exceptions=True)
+            for task in self._emergency_cancel_tasks.values():
+                task.cancel()
+            await asyncio.gather(*self._emergency_cancel_tasks.values(), return_exceptions=True)
             if started and self.config.cancel_all_on_shutdown:
                 await self._cancel_all_known_markets_safely()
             await self.client.close()
@@ -247,7 +271,16 @@ class MarketMakerEngine:
         while not self._stop.is_set():
             try:
                 async for event in self.client.stream_wallet_fill_events():
-                    await self._fill_events.put(event)
+                    if isinstance(event, WalletFillEvent):
+                        logger.info(
+                            "Wallet fill received: order=%s event=%s settlement=%s event_timestamp_ms=%s",
+                            event.order_id, event.event_type, event.settlement_id, event.event_timestamp_ms,
+                        )
+                    self._wallet_event_sequence += 1
+                    await self._wallet_events.put((
+                        0 if isinstance(event, WalletFillEvent) else 1,
+                        self._wallet_event_sequence, event,
+                    ))
                     if self._stop.is_set():
                         return
             except asyncio.CancelledError:
@@ -256,6 +289,26 @@ class MarketMakerEngine:
                 logger.warning("Wallet event stream disconnected: %s; retrying shortly", error)
                 with suppress(asyncio.TimeoutError):
                     await asyncio.wait_for(self._stop.wait(), timeout=1)
+
+    async def _process_wallet_events(self) -> None:
+        """Consume wallet events independently of quote batches and orderbook traffic."""
+        while not self._stop.is_set():
+            _, _, event = await self._wallet_events.get()
+            try:
+                if isinstance(event, WalletOrderStatusEvent):
+                    self._handle_wallet_order_status(event)
+                else:
+                    logger.info(
+                        "Wallet fill processing: order=%s event=%s queue_ms=%.1f",
+                        event.order_id, event.event_type, (monotonic() - event.received_at) * 1000,
+                    )
+                    await self._handle_wallet_fill(event)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Wallet event processing failed; REST reconciliation remains active")
+            finally:
+                self._wallet_events.task_done()
 
     def _active_order_market_ids(self) -> set[str]:
         return {
@@ -556,6 +609,8 @@ class MarketMakerEngine:
 
         async def submit(quote: Quote) -> None:
             async with semaphore:
+                if self._stop.is_set() or quote.market_id in self._halted_markets:
+                    return
                 try:
                     order = await self.client.create_order(quote)
                 except Exception as error:  # noqa: BLE001
@@ -582,6 +637,9 @@ class MarketMakerEngine:
                 # registration when another POST in the batch is still pending.
                 reference = (quote_references or {}).get(self._quote_key(order.quote))
                 self._register_order(order, reference)
+                if quote.market_id in self._halted_markets:
+                    # A fill can halt the market while this POST is in flight.
+                    await self._cancel_order_safely(order)
 
         await asyncio.gather(*(submit(quote) for quote in quotes))
 
@@ -591,6 +649,13 @@ class MarketMakerEngine:
         reference: QuoteReference | None = None,
     ) -> ManagedOrder:
         existing = self.open_orders.get(order.order_id)
+        if existing is None and order.order_hash:
+            existing = next((candidate for candidate in self.open_orders.values()
+                             if candidate.order_hash == order.order_hash), None)
+            if existing is not None and existing.order_id != order.order_id:
+                self.open_orders.pop(existing.order_id, None)
+                existing.order_id = order.order_id
+                self.open_orders[existing.order_id] = existing
         if existing is None:
             registered = order
             self.open_orders[order.order_id] = registered
@@ -601,7 +666,11 @@ class MarketMakerEngine:
             existing.quote = order.quote
             existing.order_hash = existing.order_hash or order.order_hash
             existing.is_emergency_exit = existing.is_emergency_exit or order.is_emergency_exit
+            existing.exit_context = order.exit_context or existing.exit_context
+            existing.expires_at = order.expires_at or existing.expires_at
+            existing.filled_size = max(existing.filled_size, order.filled_size)
             registered = existing
+        self._wallet_fill_totals.setdefault(registered.order_hash or registered.order_id, registered.filled_size)
         if reference is not None:
             self._order_quote_references[registered.order_id] = reference
         self._remember_order(registered)
@@ -618,7 +687,7 @@ class MarketMakerEngine:
         """Treat Predict's OPEN orders response as the dashboard source of truth."""
         if self.config.dry_run:
             return
-        candidates = self._working_orders()
+        candidates = [order for order in self._working_orders() if not order.is_emergency_exit]
         if not candidates:
             return
         try:
@@ -677,6 +746,14 @@ class MarketMakerEngine:
                 ),
                 None,
             )
+        if order is None and event.order_hash:
+            loader = getattr(self.client, "load_tracked_orders", None)
+            if loader:
+                order = next((candidate for candidate in loader()
+                              if candidate.order_hash == event.order_hash), None)
+                if order is not None:
+                    order.order_id = event.order_id
+                    order = self._register_order(order)
         if order is None:
             order = self._order_from_wallet_context(event)
             if order is not None:
@@ -701,10 +778,17 @@ class MarketMakerEngine:
                 return
 
         if event.event_type == "orderAccepted":
-            order.status = OrderStatus.OPEN
+            if order.status != OrderStatus.FILLED:
+                order.status = OrderStatus.OPEN
             logger.info("Predict.fun accepted order %s into the orderbook", order.order_id)
         else:
             order.status = OrderStatus.CANCELED
+            if order.is_emergency_exit:
+                if event.event_type == "orderExpired":
+                    order.status = OrderStatus.EXPIRED
+                elif event.event_type == "orderNotAccepted":
+                    order.status = (OrderStatus.UNKNOWN if event.reason == "rejectedDuplicate"
+                                    else OrderStatus.REJECTED)
             logger.warning(
                 "Predict.fun %s order %s%s",
                 {
@@ -716,6 +800,7 @@ class MarketMakerEngine:
                 f": {event.reason}" if event.reason else "",
             )
         self._remember_order(order)
+        self._wake_exit(order)
 
     async def _cancel_orders_approached_by_market(self, market_id: str, orderbook: OrderBook) -> None:
         """Cancel quotes once the market touch is only one tick away from them."""
@@ -936,10 +1021,17 @@ class MarketMakerEngine:
                     filled_size=delta,
                     settlement_id=f"rest:{order.order_id}:{cumulative}",
                     event_type="REST order reconciliation",
+                    cumulative_filled_size=cumulative,
                 )
             )
 
     async def _handle_wallet_fill(self, event: WalletFillEvent) -> None:
+        known = self.open_orders.get(event.order_id)
+        key = (known.order_hash if known else None) or event.order_hash or event.order_id
+        async with self._fill_locks.setdefault(key, asyncio.Lock()):
+            await self._apply_wallet_fill(event)
+
+    async def _apply_wallet_fill(self, event: WalletFillEvent) -> None:
         order = self.open_orders.get(event.order_id)
         if order is None and event.order_hash:
             order = next(
@@ -958,16 +1050,35 @@ class MarketMakerEngine:
                     event.event_type,
                 )
                 return
-        if order.is_emergency_exit or order.quote.side != Side.BUY:
+        if order.quote.side != Side.BUY and not order.is_emergency_exit:
+            return
+        if order.quote.side == Side.BUY and not self.config.emergency_exit_on_buy_fill:
             return
 
         fill_size = event.filled_size
         if fill_size <= Decimal("0"):
             return
 
-        settlement_key = event.settlement_id or (
+        order_key = order.order_hash or order.order_id
+        self._wallet_fill_totals.setdefault(order_key, order.filled_size)
+        settlement_key = order_key + ":" + (event.settlement_id or (
             f"{event.order_id}:{event.order_hash or ''}:{fill_size}"
-        )
+        ))
+        if order.is_emergency_exit:
+            pending = self._pending_sell_settlements.setdefault(order_key, set())
+            if event.event_type == "orderTransactionSubmitted":
+                pending.add(settlement_key)
+                logger.info("Emergency sell matched: order=%s settlement=%s", order.order_id, settlement_key)
+                self._wake_exit(order)
+                return
+            pending.discard(settlement_key)
+            if event.event_type == "orderTransactionFailed":
+                logger.error("Emergency sell settlement failed: order=%s", order.order_id)
+                self._wake_exit(order)
+                return
+        elif event.event_type == "orderTransactionFailed":
+            logger.warning("Buy settlement failed: order=%s; no sell submitted", order.order_id)
+            return
 
         # Submitted means the match is being settled on-chain. Stop exposing the
         # market immediately, but do not try to sell yet: the bought ERC-1155
@@ -976,11 +1087,12 @@ class MarketMakerEngine:
             if settlement_key in self._submitted_fill_settlements:
                 return
             self._submitted_fill_settlements.add(settlement_key)
+            self._match_received_at.setdefault(order_key, event.received_at)
             logger.critical(
                 "Buy order %s matched; canceling market quotes while on-chain settlement completes",
                 order.order_id,
             )
-            await self._prepare_emergency_exit(order)
+            self._ensure_emergency_cancel(order)
             return
 
         # A success event can race with a local cancellation. The order's local
@@ -989,16 +1101,37 @@ class MarketMakerEngine:
             return
         self._handled_fill_settlements.add(settlement_key)
 
-        fill_size = min(fill_size, max(Decimal("0"), order.quote.size - order.filled_size))
+        if event.cumulative_filled_size is not None:
+            cumulative = event.cumulative_filled_size
+        else:
+            self._wallet_fill_totals[order_key] += fill_size
+            cumulative = self._wallet_fill_totals[order_key]
+        fill_size = max(Decimal("0"), min(cumulative, order.quote.size) - order.filled_size)
         if fill_size <= Decimal("0"):
             return
         order.filled_size += fill_size
+        if order.filled_size >= order.quote.size:
+            order.status = OrderStatus.FILLED
         self._remember_order(order)
+        if order.is_emergency_exit:
+            logger.critical(
+                "Emergency sell settlement confirmed: order=%s filled=%s/%s event_timestamp_ms=%s",
+                order.order_id, order.filled_size, order.quote.size, event.event_timestamp_ms,
+            )
+            self._wake_exit(order)
+            return
         logger.critical(
             "Detected %s for buy order %s; starting emergency exit",
             event.event_type,
             order.order_id,
         )
+        matched_at = self._match_received_at.get(order_key)
+        logger.info(
+            "Buy settlement timing: order=%s queue_ms=%.1f match_to_success_ms=%s",
+            order.order_id, (monotonic() - event.received_at) * 1000,
+            round((event.received_at - matched_at) * 1000, 1) if matched_at is not None else "unknown",
+        )
+        self._ensure_emergency_cancel(order)
         task = asyncio.create_task(self._emergency_exit(order, fill_size))
         self._emergency_tasks.add(task)
         task.add_done_callback(self._emergency_tasks.discard)
@@ -1034,7 +1167,12 @@ class MarketMakerEngine:
     async def _recover_wallet_fill_order(
         self, event: WalletFillEvent
     ) -> ManagedOrder | None:
-        order = self._order_from_wallet_context(event)
+        # An exit can fill before its POST response. Recover the persisted
+        # pre-POST intent so its sell event is not mistaken for an unrelated sell.
+        loader = getattr(self.client, "load_tracked_orders", None)
+        order = next((candidate for candidate in loader()
+                      if event.order_hash and candidate.order_hash == event.order_hash), None) if loader else None
+        order = order or self._order_from_wallet_context(event)
         if order is None and event.order_hash:
             recover = getattr(self.client, "get_order_by_hash", None)
             if callable(recover):
@@ -1054,7 +1192,8 @@ class MarketMakerEngine:
         # The event being handled is the source of truth for this delta. A hash
         # lookup may already report the cumulative fill, which would otherwise
         # make the emergency-exit calculation incorrectly discard this event.
-        order.filled_size = Decimal("0")
+        if not order.is_emergency_exit:
+            order.filled_size = Decimal("0")
         registered = self._register_order(order)
         logger.critical(
             "Recovered previously unregistered %s order %s on market %s; "
@@ -1065,13 +1204,21 @@ class MarketMakerEngine:
         )
         return registered
 
-    async def _prepare_emergency_exit(self, filled_order: ManagedOrder) -> None:
+    def _ensure_emergency_cancel(self, filled_order: ManagedOrder) -> None:
         market_id = filled_order.quote.market_id
         self._halted_markets.add(market_id)
         if market_id in self._prepared_emergency_markets:
             return
+        task = self._emergency_cancel_tasks.get(market_id)
+        if task is None or task.done():
+            self._emergency_cancel_tasks[market_id] = asyncio.create_task(
+                self._prepare_emergency_exit(filled_order)
+            )
+
+    async def _prepare_emergency_exit(self, filled_order: ManagedOrder) -> None:
+        market_id = filled_order.quote.market_id
         try:
-            await self.client.cancel_all_orders(market_id)
+            await self.client.cancel_market_buy_orders(market_id)
         except Exception as error:  # noqa: BLE001
             logger.critical(
                 "Could not cancel all market quotes before emergency exit; "
@@ -1080,15 +1227,112 @@ class MarketMakerEngine:
             )
             return
         for order in self.open_orders.values():
-            if order.quote.market_id == market_id and order.status in {
+            if (order.quote.market_id == market_id and order.quote.side == Side.BUY
+                    and order.status in {
                 OrderStatus.PENDING,
                 OrderStatus.OPEN,
-            }:
+            }):
                 order.status = OrderStatus.CANCELED
         self._prepared_emergency_markets.add(market_id)
 
-    async def _emergency_exit(self, filled_order: ManagedOrder, fill_size: Decimal) -> None:
+    def _wake_exit(self, order: ManagedOrder) -> None:
+        self._exit_wakeups.setdefault(order.order_hash or order.order_id, asyncio.Event()).set()
+
+    async def _monitor_emergency_sell(self, order: ManagedOrder) -> Decimal:
+        """Return sold quantity only when filled or definitively safe to replace.
+
+        A removal/404/timeout is NOT proof the signed order cannot still fill.
+        Such orders stay under observation and never cause an additional sell.
+        """
+        key = order.order_hash or order.order_id
+        wake = self._exit_wakeups.setdefault(key, asyncio.Event())
+        last_warning = float("-inf")
+        while not self._stop.is_set():
+            wake.clear()
+            if order.filled_size >= order.quote.size:
+                order.status = OrderStatus.FILLED
+                self._remember_order(order)
+                return order.filled_size
+            confirmed_terminal = False
+            try:
+                remote = await self.client.get_order_by_hash(order.order_hash or "")
+                if remote is not None:
+                    # A hash lookup can reveal the numeric ID after an uncertain POST.
+                    remote.is_emergency_exit = True
+                    remote.exit_context = order.exit_context
+                    order = self._register_order(remote)
+                    order.filled_size = max(order.filled_size, remote.filled_size)
+                    if order.filled_size >= order.quote.size:
+                        order.status = OrderStatus.FILLED
+                    elif order.status != OrderStatus.FILLED:
+                        order.status = remote.status
+                    self._remember_order(order)
+                    confirmed_terminal = remote.status in {OrderStatus.REJECTED, OrderStatus.EXPIRED}
+                # An explicit orderNotAccepted can be absent from the hash endpoint.
+                confirmed_terminal = confirmed_terminal or order.status == OrderStatus.REJECTED
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:  # noqa: BLE001
+                if monotonic() - last_warning >= 30:
+                    logger.error("Cannot confirm emergency sell %s; NOT submitting a duplicate: %s",
+                                 order.order_id, error)
+                    last_warning = monotonic()
+                confirmed_terminal = order.status == OrderStatus.REJECTED
+
+            if order.filled_size >= order.quote.size:
+                logger.critical("Emergency sell fully filled: order=%s shares=%s (REST confirmed)",
+                                order.order_id, order.filled_size)
+                return order.filled_size
+            if confirmed_terminal and not self._pending_sell_settlements.get(key):
+                # Do not infer expiration from the local clock: require the
+                # server's terminal status, plus no known settlement in flight.
+                logger.warning("Emergency sell %s is %s; sold=%s remaining=%s",
+                               order.order_id, order.status, order.filled_size,
+                               order.quote.size - order.filled_size)
+                return order.filled_size
+            if monotonic() - last_warning >= 30:
+                logger.warning("Emergency sell pending confirmation: order=%s status=%s sold=%s/%s; no duplicate sell",
+                               order.order_id, order.status, order.filled_size, order.quote.size)
+                last_warning = monotonic()
+            with suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(wake.wait(), timeout=self._exit_poll_seconds)
+        raise asyncio.CancelledError
+
+    def _resume_emergency_exits(self) -> None:
+        latest: dict[str, ManagedOrder] = {}
+        for order in self.open_orders.values():
+            if order.exit_context:
+                latest[order.exit_context.group_id] = order
+        for order in latest.values():
+            context = order.exit_context
+            assert context is not None
+            if context.sold_before + order.filled_size >= context.target_size:
+                continue
+            self._halted_markets.add(order.quote.market_id)
+            logger.warning("Resuming emergency sell confirmation for order %s", order.order_id)
+            task = asyncio.create_task(self._emergency_exit(order, context.target_size, resume=order))
+            self._emergency_tasks.add(task)
+            task.add_done_callback(self._emergency_tasks.discard)
+
+    async def _emergency_exit(
+        self, filled_order: ManagedOrder, fill_size: Decimal, *, resume: ManagedOrder | None = None,
+    ) -> None:
+        key = (filled_order.quote.market_id, filled_order.quote.token_id or filled_order.quote.outcome)
+        async with self._exit_locks.setdefault(key, asyncio.Lock()):
+            await self._run_emergency_exit(filled_order, fill_size, resume=resume)
+
+    async def _run_emergency_exit(
+        self, filled_order: ManagedOrder, fill_size: Decimal, *, resume: ManagedOrder | None = None,
+    ) -> None:
+        started_at = monotonic()
         market_id = filled_order.quote.market_id
+        context = resume.exit_context if resume else ExitContext(
+            group_id=uuid4().hex, source_order_id=filled_order.order_id, target_size=fill_size,
+        )
+        assert context is not None
+        sold = context.sold_before
+        current = resume
+        self._ensure_emergency_cancel(filled_order)
         exit_price = await self._emergency_exit_price(market_id)
         logger.critical(
             "BUY order filled on %s; canceling market quotes and selling %s "
@@ -1097,21 +1341,40 @@ class MarketMakerEngine:
             fill_size,
             exit_price,
         )
-        await self._prepare_emergency_exit(filled_order)
-
         attempt = 0
-        while not self._stop.is_set():
+        while not self._stop.is_set() and sold < context.target_size:
+            if current is not None:
+                sold += await self._monitor_emergency_sell(current)
+                current = None
+                if sold >= context.target_size:
+                    logger.critical(
+                        "Emergency exit complete: market=%s source_order=%s sold=%s monitor_elapsed_ms=%.1f",
+                        market_id, context.source_order_id, sold, (monotonic() - started_at) * 1000,
+                    )
+                    return
+                context = replace(context, sold_before=sold)
+                with suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(self._stop.wait(), timeout=self._emergency_retry_base_seconds)
+                if self._stop.is_set():
+                    return
             attempt += 1
+            self._ensure_emergency_cancel(filled_order)
             try:
                 exit_order = await self.client.create_order(
                     replace(
                         filled_order.quote,
                         side=Side.SELL,
                         price=exit_price,
-                        size=fill_size,
+                        size=context.target_size - sold,
                     ),
                     post_only=False,
+                    exit_context=context,
                 )
+            except PredictOrderSubmissionUnknown as error:
+                current = self._register_order(error.order)
+                logger.critical("Emergency POST outcome unknown: order_hash=%s; checking original order, not resubmitting",
+                                current.order_hash)
+                continue
             except asyncio.CancelledError:
                 raise
             except Exception as error:  # noqa: BLE001
@@ -1143,15 +1406,15 @@ class MarketMakerEngine:
                 return
 
             exit_order.is_emergency_exit = True
-            self.open_orders[exit_order.order_id] = exit_order
-            self._remember_order(exit_order)
+            exit_order.exit_context = context
+            current = self._register_order(exit_order)
             logger.critical(
-                "Emergency %s sell order submitted for market %s: %s",
+                "Emergency %s sell order submitted for market %s: %s; exit_to_submit_ms=%.1f; awaiting fill",
                 exit_price,
                 market_id,
                 exit_order.order_id,
+                (monotonic() - started_at) * 1000,
             )
-            return
 
     async def _emergency_exit_price(self, market_id: str) -> Decimal:
         """Use the lowest aggressive limit supported by the current market tick."""

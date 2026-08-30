@@ -741,6 +741,8 @@ class PredictClient:
                         raw_message = await asyncio.wait_for(websocket.recv(), timeout=0.5)
                     except asyncio.TimeoutError:
                         continue
+                    received_at = monotonic()
+                    received_timestamp_ms = int(time() * 1000)
                     message = json.loads(raw_message)
                     error = message.get("error") if isinstance(message, dict) else None
                     if isinstance(error, dict):
@@ -773,10 +775,12 @@ class PredictClient:
                         if market
                         else None
                     )
-                    yield self._parse_orderbook(
-                        market_id,
-                        payload,
-                        tick_size=tick_size,
+                    yield replace(
+                        self._parse_orderbook(
+                            market_id, payload, tick_size=tick_size, source="websocket",
+                        ),
+                        received_at=received_at,
+                        received_timestamp_ms=received_timestamp_ms,
                     )
         finally:
             self.orderbook_stream_connected = False
@@ -1315,6 +1319,7 @@ class PredictClient:
         data: dict,
         *,
         tick_size: Decimal | None = None,
+        source: str = "rest",
     ) -> OrderBook:
         bids_raw = data.get("bids") or data.get("buy") or []
         asks_raw = data.get("asks") or data.get("sell") or []
@@ -1324,7 +1329,15 @@ class PredictClient:
             reverse=True,
         )
         asks = sorted([self._parse_level(row) for row in asks_raw], key=lambda level: level.price)
-        return OrderBook(market_id=market_id, bids=bids, asks=asks, tick_size=tick_size)
+        timestamp = data.get("updateTimestampMs")
+        try:
+            timestamp = int(timestamp) if timestamp is not None else None
+        except (ValueError, TypeError, OverflowError):
+            timestamp = None
+        return OrderBook(
+            market_id=market_id, bids=bids, asks=asks, tick_size=tick_size,
+            update_timestamp_ms=timestamp, source=source,
+        )
 
     async def _get_market_metadata(self, market_id: str) -> dict:
         if market_id not in self._market_metadata:

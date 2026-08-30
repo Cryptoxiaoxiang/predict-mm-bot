@@ -463,6 +463,7 @@ def test_parse_orderbook_unwraps_predict_data() -> None:
         "1",
         {
             "marketId": 1,
+            "updateTimestampMs": 1788060937707,
             "bids": [["0.49", "10"], ["0.48", "5"]],
             "asks": [["0.51", "11"], ["0.52", "6"]],
         },
@@ -472,6 +473,9 @@ def test_parse_orderbook_unwraps_predict_data() -> None:
     assert book.best_bid.price == Decimal("0.49")
     assert book.best_ask is not None
     assert book.best_ask.price == Decimal("0.51")
+    assert book.update_timestamp_ms == 1788060937707
+    assert book.received_timestamp_ms > 0
+    assert book.source == "rest"
 
 
 def test_market_decimal_precision_sets_tick_size() -> None:

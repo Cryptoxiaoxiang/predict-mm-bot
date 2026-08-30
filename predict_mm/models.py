@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_DOWN, ROUND_UP
 from enum import StrEnum
-from time import monotonic
+from time import monotonic, time
 
 
 class Side(StrEnum):
@@ -33,6 +33,10 @@ class OrderBook:
     bids: list[Level]
     asks: list[Level]
     tick_size: Decimal | None = None
+    update_timestamp_ms: int | None = field(default=None, compare=False)
+    received_at: float = field(default_factory=monotonic, compare=False)
+    received_timestamp_ms: int = field(default_factory=lambda: int(time() * 1000), compare=False)
+    source: str = field(default="rest", compare=False)
 
     @property
     def best_bid(self) -> Level | None:

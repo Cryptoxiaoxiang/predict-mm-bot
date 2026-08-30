@@ -50,6 +50,7 @@ class MarketMakerEngine:
     MARKET_BATCH_INTERVAL_SECONDS = 1.0
     MARKET_FETCH_CONCURRENCY = 5
     ORDER_SUBMIT_CONCURRENCY = 5
+    CANCEL_CONCURRENCY = 3
     NO_SAFE_QUOTE_BACKOFF_SECONDS = 15.0
 
     def __init__(
@@ -75,6 +76,12 @@ class MarketMakerEngine:
         self._wallet_event_sequence = 0
         self._wallet_processor_task: asyncio.Task[None] | None = None
         self._orderbook_task: asyncio.Task[None] | None = None
+        self._cancel_slots = asyncio.Semaphore(self.CANCEL_CONCURRENCY)
+        self._cancel_tasks: dict[str, asyncio.Task[bool]] = {}
+        self._guard_cancel_tasks: dict[str, asyncio.Task[bool]] = {}
+        self._guard_first_attempts: dict[str, asyncio.Future[bool]] = {}
+        self._cancel_not_before = 0.0
+        self._orderbook_history: dict[str, deque[OrderBook]] = {}
         self._emergency_tasks: set[asyncio.Task[None]] = set()
         self._emergency_cancel_tasks: dict[str, asyncio.Task[None]] = {}
         self._fill_locks: dict[str, asyncio.Lock] = {}
@@ -250,6 +257,13 @@ class MarketMakerEngine:
                 self._orderbook_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await self._orderbook_task
+            # Stop retry controllers before closing the client or account-wide
+            # shutdown cleanup. In-flight HTTP removal may still complete; the
+            # shutdown removal and durable fill tracking remain authoritative.
+            cancel_tasks = list(self._guard_cancel_tasks.values()) + list(self._cancel_tasks.values())
+            for task in cancel_tasks:
+                task.cancel()
+            await asyncio.gather(*cancel_tasks, return_exceptions=True)
             for task in list(self._emergency_tasks):
                 task.cancel()
             if self._emergency_tasks:
@@ -329,7 +343,9 @@ class MarketMakerEngine:
                 async for orderbook in self.client.stream_orderbook_updates(
                     self._active_order_market_ids
                 ):
-                    await self._fill_events.put(orderbook)
+                    # Check every update here, independently of slow quote
+                    # batches. Never await removal HTTP calls in the receiver.
+                    await self._handle_orderbook_update(orderbook, wait_for_cancels=False)
                     if self._stop.is_set():
                         return
             except asyncio.CancelledError:
@@ -358,15 +374,36 @@ class MarketMakerEngine:
             else:
                 await self._handle_wallet_fill(event)
 
-    async def _handle_orderbook_update(self, orderbook: OrderBook) -> None:
+    def _cache_orderbook(self, orderbook: OrderBook) -> OrderBook | None:
+        previous = self._latest_orderbooks.get(orderbook.market_id)
+        if (previous is not None
+                and previous.update_timestamp_ms is not None
+                and orderbook.update_timestamp_ms is not None
+                and orderbook.update_timestamp_ms < previous.update_timestamp_ms):
+            return None
         tick_size = orderbook.tick_size or self._market_tick_sizes.get(orderbook.market_id)
         if tick_size is not None and orderbook.tick_size is None:
             orderbook = replace(orderbook, tick_size=tick_size)
         self._latest_orderbooks[orderbook.market_id] = orderbook
         if tick_size is not None:
             self._market_tick_sizes[orderbook.market_id] = tick_size
+        history = self._orderbook_history.setdefault(orderbook.market_id, deque(maxlen=32))
+        if (not history or history[-1].best_bid != orderbook.best_bid
+                or history[-1].best_ask != orderbook.best_ask
+                or orderbook.received_at - history[-1].received_at >= 1):
+            history.append(orderbook)
+        return orderbook
+
+    async def _handle_orderbook_update(
+        self, orderbook: OrderBook, *, wait_for_cancels: bool = True,
+    ) -> None:
+        orderbook = self._cache_orderbook(orderbook)
+        if orderbook is None:
+            return
         if self.config.replace_on_orderbook_change:
-            await self._cancel_orders_approached_by_market(orderbook.market_id, orderbook)
+            await self._cancel_orders_approached_by_market(
+                orderbook.market_id, orderbook, wait=wait_for_cancels,
+            )
 
     async def _manage_active_order_lifetimes_from_cache(self) -> None:
         for market in self.config.enabled_markets:
@@ -409,9 +446,7 @@ class MarketMakerEngine:
         for market, orderbook in await self._fetch_orderbooks(markets):
             if orderbook is None:
                 continue
-            self._latest_orderbooks[market.id] = orderbook
-            if orderbook.tick_size is not None:
-                self._market_tick_sizes[market.id] = orderbook.tick_size
+            orderbook = self._cache_orderbook(orderbook) or self._latest_orderbooks[market.id]
             if self.config.replace_on_orderbook_change:
                 await self._cancel_orders_approached_by_market(market.id, orderbook)
             outcome_side = self._outcome_side(market)
@@ -617,6 +652,15 @@ class MarketMakerEngine:
             async with semaphore:
                 if self._stop.is_set() or quote.market_id in self._halted_markets:
                     return
+                latest = self._latest_orderbooks.get(quote.market_id)
+                if (latest is not None and self.config.replace_on_orderbook_change
+                        and self._approached_touch(quote, latest) is not None):
+                    logger.info(
+                        "Skip stale quote before submission: market=%s outcome=%s price=%s; "
+                        "latest book is already within one tick",
+                        quote.market_id, quote.outcome, quote.price,
+                    )
+                    return
                 try:
                     order = await self.client.create_order(quote)
                 except Exception as error:  # noqa: BLE001
@@ -643,6 +687,13 @@ class MarketMakerEngine:
                 # registration when another POST in the batch is still pending.
                 reference = (quote_references or {}).get(self._quote_key(order.quote))
                 self._register_order(order, reference)
+                latest = self._latest_orderbooks.get(quote.market_id)
+                if latest is not None and self.config.replace_on_orderbook_change:
+                    # A price update can precede the POST response/registration.
+                    # Recheck now, even if no further WS message arrives.
+                    await self._cancel_orders_approached_by_market(
+                        quote.market_id, latest, wait=False,
+                    )
                 if quote.market_id in self._halted_markets:
                     # A fill can halt the market while this POST is in flight.
                     await self._cancel_order_safely(order)
@@ -820,9 +871,12 @@ class MarketMakerEngine:
         self._remember_order(order)
         self._wake_exit(order)
 
-    async def _cancel_orders_approached_by_market(self, market_id: str, orderbook: OrderBook) -> None:
+    async def _cancel_orders_approached_by_market(
+        self, market_id: str, orderbook: OrderBook, *, wait: bool = True,
+    ) -> None:
         """Cancel quotes once the market touch is only one tick away from them."""
         tick_size = orderbook.tick_size or self.config.strategy.tick_size
+        pending: list[asyncio.Future[bool]] = []
         for order in list(self.open_orders.values()):
             if (
                 order.status not in {OrderStatus.PENDING, OrderStatus.OPEN}
@@ -831,44 +885,80 @@ class MarketMakerEngine:
             ):
                 continue
 
-            canonical_outcome = (
-                order.quote.outcome_side or order.quote.outcome
-            ).strip().upper()
-            if order.quote.side == Side.BUY and canonical_outcome == "NO":
-                # Predict publishes only the YES book.  The current NO bid is
-                # the complement of the best YES ask.
-                if orderbook.best_ask is None:
-                    continue
-                touch_price = Decimal("1") - orderbook.best_ask.price
-            else:
-                best_price = (
-                    orderbook.best_bid
-                    if order.quote.side == Side.BUY
-                    else orderbook.best_ask
+            touch_price = self._approached_touch(order.quote, orderbook)
+            if touch_price is None:
+                continue
+
+            task = self._guard_cancel_tasks.get(order.order_id)
+            if task is None or task.done():
+                triggered_at = monotonic()
+                logger.info(
+                    "Price guard triggered: order=%s market=%s outcome=%s quote=%s touch=%s "
+                    "tick=%s source=%s book_ts_ms=%s received_ts_ms=%s receive_to_trigger_ms=%.1f",
+                    order.order_id, market_id, order.quote.outcome, order.quote.price,
+                    touch_price, tick_size, orderbook.source, orderbook.update_timestamp_ms,
+                    orderbook.received_timestamp_ms, (triggered_at - orderbook.received_at) * 1000,
                 )
-                if best_price is None:
-                    continue
-                touch_price = best_price.price
+                first_attempt = asyncio.get_running_loop().create_future()
+                self._guard_first_attempts[order.order_id] = first_attempt
+                task = asyncio.create_task(self._run_guard_cancel(order, triggered_at, first_attempt))
+                self._guard_cancel_tasks[order.order_id] = task
+                task.add_done_callback(
+                    lambda done, oid=order.order_id: self._forget_guard_task(oid, done)
+                )
+            pending.append(self._guard_first_attempts[order.order_id])
+        if wait and pending:
+            # REST quote construction waits for the first attempts, not an
+            # unbounded retry controller. Working orders reserve risk meanwhile.
+            await asyncio.gather(*(asyncio.shield(attempt) for attempt in pending))
 
-            if self._minimum_tick_buy_is_pinned(order, orderbook, tick_size):
-                continue
+    def _forget_guard_task(self, order_id: str, task: asyncio.Task) -> None:
+        if self._guard_cancel_tasks.get(order_id) is task:
+            first_attempt = self._guard_first_attempts.pop(order_id, None)
+            if first_attempt is not None and not first_attempt.done():
+                first_attempt.set_result(False)
+        self._forget_task(self._guard_cancel_tasks, order_id, task)
 
-            is_approached = (
-                touch_price <= order.quote.price + tick_size
-                if order.quote.side == Side.BUY
-                else touch_price >= order.quote.price - tick_size
-            )
-            if not is_approached:
-                continue
+    @staticmethod
+    def _forget_task(tasks: dict, order_id: str, task: asyncio.Task) -> None:
+        if tasks.get(order_id) is task:
+            tasks.pop(order_id, None)
+        if not task.cancelled() and task.exception() is not None:
+            logger.error("Order cancellation worker failed: order=%s error=%s", order_id, task.exception())
 
-            logger.info(
-                "Canceling %s quote %s on %s: market touch %s is within one tick",
-                order.quote.side.value,
-                order.quote.price,
-                market_id,
-                touch_price,
-            )
-            await self._cancel_order_safely(order)
+    async def _run_guard_cancel(
+        self, order: ManagedOrder, triggered_at: float, first_attempt: asyncio.Future[bool],
+    ) -> bool:
+        # One controller per order. Retry failures without requiring another
+        # price update; a static dangerous book must not leave a failed cancel idle.
+        delay = 0.5
+        while not self._stop.is_set() and order.status in {OrderStatus.PENDING, OrderStatus.OPEN}:
+            result = await self._cancel_order_safely(order, triggered_at=triggered_at)
+            if not first_attempt.done():
+                first_attempt.set_result(result)
+            if result:
+                return True
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=delay)
+                return False
+            except asyncio.TimeoutError:
+                pass
+            delay = min(delay * 2, 4.0)
+        return False
+
+    def _approached_touch(self, quote: Quote, book: OrderBook) -> Decimal | None:
+        tick = book.tick_size or self.config.strategy.tick_size
+        canonical = (quote.outcome_side or quote.outcome).strip().upper()
+        if quote.side == Side.BUY and canonical == "NO":
+            touch = Decimal("1") - book.best_ask.price if book.best_ask else None
+        else:
+            level = book.best_bid if quote.side == Side.BUY else book.best_ask
+            touch = level.price if level else None
+        if touch is None or self._minimum_tick_quote_is_pinned(quote, book, tick):
+            return None
+        approached = (touch <= quote.price + tick if quote.side == Side.BUY
+                      else touch >= quote.price - tick)
+        return touch if approached else None
 
     @staticmethod
     def _minimum_tick_buy_is_pinned(
@@ -877,15 +967,21 @@ class MarketMakerEngine:
         tick_size: Decimal,
     ) -> bool:
         """Keep an unmovable floor quote until its one-tick spread widens."""
+        return MarketMakerEngine._minimum_tick_quote_is_pinned(order.quote, orderbook, tick_size)
+
+    @staticmethod
+    def _minimum_tick_quote_is_pinned(
+        quote: Quote, orderbook: OrderBook, tick_size: Decimal,
+    ) -> bool:
         if (
-            order.quote.side != Side.BUY
-            or order.quote.price != tick_size
+            quote.side != Side.BUY
+            or quote.price != tick_size
             or orderbook.spread is None
             or orderbook.spread > tick_size
         ):
             return False
         canonical_outcome = (
-            order.quote.outcome_side or order.quote.outcome
+            quote.outcome_side or quote.outcome
         ).strip().upper()
         if canonical_outcome == "NO":
             touch_price = (
@@ -987,22 +1083,71 @@ class MarketMakerEngine:
             target_price=quote.price,
         )
 
-    async def _cancel_order_safely(self, order: ManagedOrder) -> bool:
+    async def _cancel_order_safely(
+        self, order: ManagedOrder, *, triggered_at: float | None = None,
+    ) -> bool:
         """Keep a temporary cancel API failure from stopping the entire engine."""
+        task = self._cancel_tasks.get(order.order_id)
+        if task is None or task.done():
+            task = asyncio.create_task(self._remove_order(order, triggered_at))
+            self._cancel_tasks[order.order_id] = task
+            task.add_done_callback(
+                lambda done: self._forget_task(self._cancel_tasks, order.order_id, done)
+            )
+        return await asyncio.shield(task)
+
+    async def _remove_order(self, order: ManagedOrder, triggered_at: float | None) -> bool:
+        async with self._cancel_slots:
+            while monotonic() < self._cancel_not_before:
+                await asyncio.sleep(self._cancel_not_before - monotonic())
+            if order.status not in {OrderStatus.PENDING, OrderStatus.OPEN, OrderStatus.UNKNOWN}:
+                return True
+            return await self._remove_order_request(order, triggered_at)
+
+    async def _remove_order_request(self, order: ManagedOrder, triggered_at: float | None) -> bool:
+        started_at = monotonic()
+        logger.info(
+            "Cancel request started: order=%s market=%s trigger_to_request_ms=%s",
+            order.order_id, order.quote.market_id,
+            round((started_at - triggered_at) * 1000, 1) if triggered_at is not None else None,
+        )
         try:
             await self.client.cancel_order(order.order_id)
         except Exception as error:  # noqa: BLE001
+            if isinstance(error, PredictRateLimitError):
+                self._cancel_not_before = max(
+                    self._cancel_not_before, monotonic() + max(0.5, error.retry_after),
+                )
             logger.warning(
                 "Cancel failed for order %s; keeping it active and retrying next cycle: %s",
                 order.order_id,
                 error,
             )
             return False
-        order.status = OrderStatus.CANCELED
+        if order.status != OrderStatus.FILLED:
+            order.status = OrderStatus.CANCELED
         self._order_quote_references.pop(order.order_id, None)
         self._extended_lifetime_orders.discard(order.order_id)
         self._remember_order(order)
+        logger.info(
+            "Cancel removal acknowledged: order=%s market=%s request_ms=%.1f trigger_to_ack_ms=%s",
+            order.order_id, order.quote.market_id, (monotonic() - started_at) * 1000,
+            round((monotonic() - triggered_at) * 1000, 1) if triggered_at is not None else None,
+        )
         return True
+
+    def _log_prefill_orderbooks(self, order: ManagedOrder) -> None:
+        for book in list(self._orderbook_history.get(order.quote.market_id, []))[-8:]:
+            logger.info(
+                "Pre-fill orderbook: order=%s market=%s source=%s book_ts_ms=%s "
+                "received_ts_ms=%s bid=%s bid_size=%s ask=%s ask_size=%s",
+                order.order_id, order.quote.market_id, book.source, book.update_timestamp_ms,
+                book.received_timestamp_ms,
+                book.best_bid.price if book.best_bid else None,
+                book.best_bid.size if book.best_bid else None,
+                book.best_ask.price if book.best_ask else None,
+                book.best_ask.size if book.best_ask else None,
+            )
 
     async def _reconcile_buy_fills(self) -> None:
         """Recover fills missed while the no-snapshot wallet stream was disconnected."""
@@ -1116,6 +1261,8 @@ class MarketMakerEngine:
                     or settlement_key in order.wallet_settlement_ids
                     or settlement_key in order.failed_settlement_ids):
                 return
+            if not order.matched_settlements:
+                self._log_prefill_orderbooks(order)
             order.matched_settlements[settlement_key] = min(fill_size, order.quote.size)
             self._match_received_at.setdefault(order_key, event.received_at)
             logger.critical(

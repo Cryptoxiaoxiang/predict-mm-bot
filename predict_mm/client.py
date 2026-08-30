@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from collections.abc import Callable
-from dataclasses import asdict, is_dataclass, replace
+from dataclasses import asdict, dataclass, field as dataclass_field, is_dataclass, replace
 import html
 import json
 import logging
@@ -13,7 +14,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from time import monotonic
+from time import monotonic, time
 from uuid import uuid4
 
 import requests
@@ -40,6 +41,28 @@ class PredictAuthorizationError(RuntimeError):
 
 class PredictTransientError(RuntimeError):
     """Predict temporarily rejected a request that is safe to retry."""
+
+
+class PredictInsufficientSharesError(RuntimeError):
+    """An explicit HTTP 400 rejected this sell before acceptance."""
+
+
+class PredictRateLimitError(RuntimeError):
+    """An explicit HTTP 429; respect the server's cooldown."""
+
+    def __init__(self, message: str, retry_after: float = 5.0) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+@dataclass
+class PreparedOrder:
+    """Local-only signature; never persisted or submitted during preparation."""
+
+    quote: Quote
+    post_only: bool
+    payload: dict = dataclass_field(repr=False)
+    used: bool = False
 
 
 class PredictOrderSubmissionUnknown(RuntimeError):
@@ -71,11 +94,41 @@ class PredictClient:
         self._dry_orders: dict[str, ManagedOrder] = {}
         self._market_metadata: dict[str, dict] = {}
         self._order_journal_path = Path(settings.order_journal_path)
+        self._request_times: deque[float] = deque()
+        self._next_early_probe_at = 0.0
+        self._rate_limit_until = 0.0
+        self._emergency_submit_lock = asyncio.Lock()
+        self._next_emergency_submit_at = 0.0
         self.wallet_stream_connected = False
         self.orderbook_stream_connected = False
 
     async def close(self) -> None:
         return None
+
+    def allow_early_fill_probe(self) -> bool:
+        """Budget ONLY the additional fast-path reads, not existing risk controls.
+
+        At most one extra probe/second across all markets; leave 60 of the
+        documented default 240 requests/minute for normal/critical traffic.
+        An exhausted budget falls back to the existing WS/REST reconciliation.
+        """
+        now = monotonic()
+        while self._request_times and self._request_times[0] <= now - 60:
+            self._request_times.popleft()
+        if (now < max(self._next_early_probe_at, self._rate_limit_until)
+                or len(self._request_times) >= 180):
+            return False
+        self._next_early_probe_at = now + 1.0
+        return True
+
+    async def _pace_emergency_submission(self) -> None:
+        # Sequential starts, including across simultaneous fills. Never queue a
+        # second POST merely because the first one's response has not arrived.
+        async with self._emergency_submit_lock:
+            delay = max(self._next_emergency_submit_at, self._rate_limit_until) - monotonic()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            self._next_emergency_submit_at = monotonic() + 0.5
 
     async def get_usdt_balance(self) -> tuple[Decimal, str]:
         """Read the configured trading account's on-chain USDT balance.
@@ -447,12 +500,33 @@ class PredictClient:
             )
             return order
 
+        prepared = await self.prepare_order(quote, post_only=post_only)
+        return await self.submit_prepared_order(prepared, exit_context=exit_context)
+
+    async def prepare_order(self, quote: Quote, *, post_only: bool = False) -> PreparedOrder:
+        """Resolve metadata and sign without sending an order or changing holdings."""
         self._require_api_key()
         self._require_jwt()
         quote = await self._complete_quote_with_market_metadata(quote)
-        signed_order_payload = await asyncio.to_thread(
-            self._build_signed_limit_order_payload, quote, post_only
-        )
+        payload = await asyncio.to_thread(self._build_signed_limit_order_payload, quote, post_only)
+        return PreparedOrder(quote, post_only, payload)
+
+    async def submit_prepared_order(
+        self, prepared: PreparedOrder, *, exit_context: ExitContext | None = None,
+    ) -> ManagedOrder:
+        if prepared.used:
+            raise RuntimeError("Prepared order already submitted; reconcile its hash, do not resubmit")
+        quote, post_only = prepared.quote, prepared.post_only
+        if not post_only:
+            await self._pace_emergency_submission()
+        # The await above can race with another caller using the same object.
+        if prepared.used:
+            raise RuntimeError("Prepared order already submitted; reconcile its hash, do not resubmit")
+        prepared.used = True
+        signed_order_payload = prepared.payload
+        if float(signed_order_payload["data"]["order"]["expiration"]) - time() < 60:
+            # This signature has never been sent. It is safe to refresh it here.
+            signed_order_payload = (await self.prepare_order(quote, post_only=post_only)).payload
         signed_order = signed_order_payload["data"]["order"]
         order_hash = str(signed_order.get("hash") or "")
         intent = ManagedOrder(
@@ -469,6 +543,15 @@ class PredictClient:
             self.persist_tracked_order(intent)
         try:
             response = await self._request("POST", "/v1/orders", signed_order_payload)
+        except (PredictInsufficientSharesError, PredictRateLimitError):
+            if not post_only:
+                intent.status = OrderStatus.REJECTED
+                self.persist_tracked_order(intent)
+            # Only an explicit rejection permits reuse. Never do this on a
+            # timeout/5xx/malformed success response.
+            prepared.payload = signed_order_payload
+            prepared.used = False
+            raise
         except (requests.RequestException, PredictTransientError) as error:
             if not post_only:
                 raise PredictOrderSubmissionUnknown(intent) from error
@@ -807,6 +890,8 @@ class PredictClient:
                         created_at=monotonic(),
                         status=OrderStatus(str(record.get("status") or "unknown")),
                         filled_size=Decimal(str(record.get("filled_size") or "0")),
+                        wallet_filled_size=Decimal(str(record.get("wallet_filled_size") or "0")),
+                        wallet_settlement_ids=set(record.get("wallet_settlement_ids") or []),
                         is_emergency_exit=bool(record.get("is_emergency_exit", False)),
                         expires_at=record.get("expires_at"),
                         exit_context=ExitContext(
@@ -842,6 +927,8 @@ class PredictClient:
             "order_hash": order.order_hash,
             "status": order.status.value,
             "filled_size": str(order.filled_size),
+            "wallet_filled_size": str(order.wallet_filled_size),
+            "wallet_settlement_ids": sorted(order.wallet_settlement_ids),
             "is_emergency_exit": order.is_emergency_exit,
             "expires_at": order.expires_at,
             "exit_context": {
@@ -932,11 +1019,15 @@ class PredictClient:
             try:
                 for attempt in range(3):
                     try:
+                        now = monotonic()
+                        while self._request_times and self._request_times[0] <= now - 60:
+                            self._request_times.popleft()
+                        self._request_times.append(now)
                         return await asyncio.to_thread(
                             self._request_sync, method, path, payload, query
                         )
                     except requests.RequestException:
-                        if attempt == 2:
+                        if method.upper() != "GET" or attempt == 2:
                             raise
                         await asyncio.sleep(0.25 * (2**attempt))
                     except PredictTransientError:
@@ -946,6 +1037,11 @@ class PredictClient:
                         if method.upper() != "GET" or attempt == 2:
                             raise
                         await asyncio.sleep(0.25 * (2**attempt))
+                    except PredictRateLimitError as error:
+                        self._rate_limit_until = max(
+                            self._rate_limit_until, monotonic() + error.retry_after
+                        )
+                        raise
             except PredictAuthorizationError:
                 if (
                     authorization_retried
@@ -1034,11 +1130,21 @@ class PredictClient:
             )
             detail = re.sub(r"\s+", " ", detail)[:300]
             suffix = f"：{detail}" if detail else ""
+            message = f"Predict.fun 拒绝了 {method} {path} 请求（HTTP {response.status_code}）{suffix}"
+            if response.status_code == 429:
+                try:
+                    retry_after = max(1.0, float(response.headers.get("Retry-After", "5")))
+                except (TypeError, ValueError):
+                    retry_after = 5.0
+                raise PredictRateLimitError(message, retry_after)
+            if (response.status_code == 400 and method.upper() == "POST"
+                    and path == "/v1/orders" and "insufficient shares" in detail.casefold()):
+                raise PredictInsufficientSharesError(message)
             error_type = (
                 PredictAuthorizationError
                 if response.status_code == 401
                 else PredictTransientError
-                if response.status_code == 429 or response.status_code >= 500
+                if response.status_code >= 500
                 else RuntimeError
             )
             raise error_type(
@@ -1050,9 +1156,9 @@ class PredictClient:
         try:
             result = response.json()
         except ValueError as error:
-            raise RuntimeError(f"Predict.fun 的 {method} {path} 响应不是有效 JSON。") from error
+            raise PredictTransientError(f"Predict.fun 的 {method} {path} 响应不是有效 JSON。") from error
         if not isinstance(result, dict):
-            raise RuntimeError(f"Predict.fun 的 {method} {path} 响应格式不正确。")
+            raise PredictTransientError(f"Predict.fun 的 {method} {path} 响应格式不正确。")
         return result
 
     def _markets_from_public_page_sync(self, market_url: str, slug: str) -> list[dict]:

@@ -82,6 +82,10 @@ class ManagedOrder:
     is_emergency_exit: bool = False
     exit_context: ExitContext | None = None
     expires_at: float | None = None
+    # REST cumulative fills and delayed WS deltas are separate counters. Persist
+    # both so a late notification after restart cannot sell the same fill again.
+    wallet_filled_size: Decimal = Decimal("0")
+    wallet_settlement_ids: set[str] = field(default_factory=set)
 
     @property
     def age_seconds(self) -> float:

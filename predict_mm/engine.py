@@ -1074,7 +1074,7 @@ class MarketMakerEngine:
             return
 
         fill_size = event.filled_size
-        if fill_size <= Decimal("0"):
+        if fill_size <= Decimal("0") and event.event_type != "orderTransactionFailed":
             return
 
         order_key = order.order_hash or order.order_id

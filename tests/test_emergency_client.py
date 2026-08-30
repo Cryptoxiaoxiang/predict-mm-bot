@@ -287,6 +287,17 @@ def test_pending_source_plan_and_latest_sell_survive_pruning(tmp_path):
     assert restored["source-buy"].matched_settlements == source.matched_settlements
 
 
+def test_failed_wallet_event_without_fill_quantity_is_not_discarded():
+    client = PredictClient(Settings(), False)
+    event = client._wallet_fill_event({
+        "type": "orderTransactionFailed", "orderId": "buy", "orderHash": "buy-hash",
+        "details": {"settlementId": "s1"},
+    })
+    assert event is not None
+    assert event.filled_size == 0
+    assert event.settlement_id == "s1"
+
+
 def test_same_prepared_signature_cannot_be_posted_concurrently(tmp_path):
     async def run():
         client = SignedClient(Settings(api_key="key", jwt_token="jwt",

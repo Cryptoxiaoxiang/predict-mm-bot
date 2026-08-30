@@ -201,7 +201,8 @@ def test_failure_during_balance_retry_stops_further_posts():
         engine, _ = setup(client)
         await engine._handle_wallet_fill(event())
         await rejected.wait()
-        await engine._handle_wallet_fill(event("orderTransactionFailed"))
+        # A failure notification need not repeat the original matched quantity.
+        await engine._handle_wallet_fill(event("orderTransactionFailed", "0"))
         await drain(engine)
         assert client.submit_prepared_order.await_count == 1
     asyncio.run(run())

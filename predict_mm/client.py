@@ -1606,22 +1606,22 @@ class PredictClient:
 
     def _wallet_fill_event(self, message: dict) -> WalletFillEvent | None:
         event_type = str(message.get("type") or "")
-        # Submitted lets the engine halt and cancel quotes immediately. It must
-        # not sell until Success because the bought shares are only available
-        # after the on-chain settlement has succeeded.
+        # Submitted starts a speculative exit; Success records the factual fill.
+        # Failed may omit a fill quantity but must still stop the named retry.
         if event_type not in {"orderTransactionSubmitted", "orderTransactionSuccess", "orderTransactionFailed"}:
             return None
         fill = message.get("fill") or (message.get("details") or {}).get("fill") or {}
         size_wei = fill.get("executedSizeWei")
         order_id = message.get("orderId")
-        if not order_id or size_wei in (None, ""):
+        if not order_id or (size_wei in (None, "") and event_type != "orderTransactionFailed"):
             return None
         context = self._wallet_order_context(message)
         return WalletFillEvent(
             order_id=str(order_id),
             order_hash=str(message.get("orderHash") or "") or None,
-            filled_size=Decimal(str(size_wei)) / Decimal(10**18),
-            settlement_id=str(message.get("settlementId") or "") or None,
+            filled_size=Decimal(str(size_wei or "0")) / Decimal(10**18),
+            settlement_id=str(message.get("settlementId")
+                              or (message.get("details") or {}).get("settlementId") or "") or None,
             event_type=event_type,
             event_timestamp_ms=message.get("timestamp"),
             **context,

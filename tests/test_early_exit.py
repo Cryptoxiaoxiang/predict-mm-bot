@@ -6,7 +6,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from predict_mm.client import PredictClient, PreparedOrder
+from predict_mm.client import (
+    PredictClient, PreparedOrder, PredictInsufficientSharesError,
+    PredictOrderSubmissionUnknown, PredictSubmissionAborted,
+)
 from predict_mm.config import BotConfig, MarketConfig, RiskConfig, Settings, StrategyConfig
 from predict_mm.engine import MarketMakerEngine
 from predict_mm.models import ManagedOrder, OrderBook, OrderStatus, Quote, Side, WalletFillEvent
@@ -18,12 +21,8 @@ class EarlyClient:
     def __init__(self):
         self.prepared = asyncio.Event()
         self.submitted = asyncio.Event()
-        self.confirm = asyncio.Event()
         self.created = []
         self.signatures_used = []
-        self.cumulative = Decimal("0")
-        self.reads = 0
-        self.allow = True
         self.get_positions = AsyncMock(return_value={"1": Decimal("999")})
 
     async def cancel_market_buy_orders(self, _):
@@ -37,26 +36,19 @@ class EarlyClient:
         return PreparedOrder(quote, post_only, {"data": {"order": {
             "hash": "signed", "expiration": str(int(time()) + 300)}}})
 
-    async def submit_prepared_order(self, prepared, *, exit_context=None):
+    async def submit_prepared_order(self, prepared, *, exit_context=None, should_submit=None):
+        if should_submit is not None and not should_submit():
+            raise PredictSubmissionAborted("source failed")
         assert not prepared.used
         prepared.used = True
         self.signatures_used.append(prepared)
         return await self.create_order(prepared.quote, post_only=False, exit_context=exit_context)
 
-    async def create_order(self, quote, *, post_only=True, exit_context=None):
+    async def create_order(self, quote, *, post_only=True, exit_context=None, should_submit=None):
         self.created.append(quote)
         self.submitted.set()
         return ManagedOrder(str(len(self.created)), quote, monotonic(), OrderStatus.FILLED,
                             "sell-" + str(len(self.created)), quote.size, True, exit_context)
-
-    def allow_early_fill_probe(self):
-        return self.allow
-
-    async def get_order_by_hash(self, order_hash):
-        assert order_hash == "buy-hash"
-        self.reads += 1
-        return ManagedOrder("buy", Quote("1", Side.BUY, Decimal("0.6"), Decimal("100")),
-                            0, order_hash=order_hash, filled_size=self.cumulative)
 
 
 def setup(client):
@@ -64,8 +56,8 @@ def setup(client):
         BotConfig(markets=[MarketConfig(id="1")], cancel_all_on_shutdown=False), client,
         PassiveMakerStrategy(StrategyConfig()), RiskManager(RiskConfig()),
     )
-    engine._early_probe_interval_seconds = 0.001
-    engine._early_probe_window_seconds = 0.05
+    engine._exit_poll_seconds = 0.001
+    engine._emergency_retry_base_seconds = 0.001
     engine._market_tick_sizes["1"] = Decimal("0.001")
     source = ManagedOrder("buy", Quote("1", Side.BUY, Decimal("0.6"), Decimal("100")),
                           0, order_hash="buy-hash")
@@ -78,190 +70,269 @@ def event(kind="orderTransactionSubmitted", size="100", settlement="s1"):
 
 
 async def drain(engine):
-    await asyncio.wait_for(asyncio.gather(*engine._early_fill_tasks.values()), 1)
     await asyncio.wait_for(asyncio.gather(*engine._emergency_tasks), 1)
     await asyncio.gather(*engine._emergency_cancel_tasks.values())
 
 
-def test_match_prepares_but_does_not_sell_existing_positions_without_source_fill():
+@pytest.mark.parametrize("outcome", ["Yes", "No"])
+def test_match_posts_without_waiting_for_any_confirmation(outcome):
     async def run():
         client = EarlyClient()
         engine, source = setup(client)
+        source.quote = replace(source.quote, outcome=outcome)
         await engine._handle_wallet_fill(event())
         await drain(engine)
-        assert client.prepared.is_set()
-        assert client.reads > 0
-        assert not client.created
+        assert len(client.created) == 1
+        assert client.created[0].outcome == outcome
+        assert client.created[0].size == 100
         assert source.filled_size == 0
+        assert len(client.signatures_used) == 1
         client.get_positions.assert_not_called()
     asyncio.run(run())
 
 
-def test_source_rest_confirmation_sells_before_ws_success_and_reuses_signature():
+def test_duplicate_match_late_success_and_rest_never_resell():
     async def run():
         client = EarlyClient()
         engine, source = setup(client)
         await engine._handle_wallet_fill(event())
-        await client.prepared.wait()
-        client.cumulative = Decimal("100")
-        await asyncio.wait_for(client.submitted.wait(), 0.5)
+        await engine._handle_wallet_fill(event())
         await drain(engine)
-        assert len(client.signatures_used) == 1
+        await engine._handle_wallet_fill(event("orderTransactionSuccess"))
+        await engine._handle_wallet_fill(event("orderTransactionSuccess"))
+        await engine._handle_wallet_fill(WalletFillEvent(
+            "buy", Decimal("100"), "buy-hash", "rest:100", "REST order reconciliation",
+            cumulative_filled_size=Decimal("100")))
+        await drain(engine)
         assert source.filled_size == 100
+        assert len(client.created) == 1
+    asyncio.run(run())
+
+
+def test_success_before_submitted_never_creates_second_sell():
+    async def run():
+        client = EarlyClient()
+        engine, _ = setup(client)
         await engine._handle_wallet_fill(event("orderTransactionSuccess"))
-        await engine._handle_wallet_fill(event("orderTransactionSuccess"))
+        await drain(engine)
+        await engine._handle_wallet_fill(event())
         await drain(engine)
         assert len(client.created) == 1
     asyncio.run(run())
 
 
-def test_ws_confirmation_wins_race_with_slow_rest_without_duplicate():
+def test_multiple_partial_matches_are_sold_once_each():
     async def run():
         client = EarlyClient()
-        read_started, release = asyncio.Event(), asyncio.Event()
-        original = client.get_order_by_hash
+        engine, source = setup(client)
+        await engine._handle_wallet_fill(event(size="40"))
+        await engine._handle_wallet_fill(event(size="60", settlement="s2"))
+        await drain(engine)
+        await engine._handle_wallet_fill(event("orderTransactionSuccess", "60", "s2"))
+        await engine._handle_wallet_fill(event("orderTransactionSuccess", "40"))
+        await drain(engine)
+        assert [q.size for q in client.created] == [Decimal("40"), Decimal("60")]
+        assert source.filled_size == 100
+    asyncio.run(run())
 
-        async def slow_read(key):
-            read_started.set()
+
+def test_failed_match_stops_only_its_unsent_exit_not_other_partial():
+    async def run():
+        client = EarlyClient()
+        engine, source = setup(client)
+        await engine._handle_wallet_fill(event(size="40"))
+        await engine._handle_wallet_fill(event("orderTransactionFailed", "40"))
+        await engine._handle_wallet_fill(event(size="60", settlement="s2"))
+        await drain(engine)
+        assert [q.size for q in client.created] == [Decimal("60")]
+        assert source.filled_size == 0
+    asyncio.run(run())
+
+
+def test_failure_during_signing_prevents_post():
+    async def run():
+        client = EarlyClient()
+        started, release = asyncio.Event(), asyncio.Event()
+        original = client.prepare_order
+        async def prepare(*args, **kwargs):
+            started.set()
             await release.wait()
-            return await original(key)
-
-        client.get_order_by_hash = slow_read
+            return await original(*args, **kwargs)
+        client.prepare_order = prepare
         engine, _ = setup(client)
         await engine._handle_wallet_fill(event())
-        await read_started.wait()
+        await started.wait()
+        await engine._handle_wallet_fill(event("orderTransactionFailed"))
+        release.set()
+        await drain(engine)
+        assert not client.created
+    asyncio.run(run())
+
+
+def test_balance_rejection_reuses_signature_and_success_does_not_duplicate():
+    async def run():
+        client = EarlyClient()
+        original = client.submit_prepared_order
+        attempts = []
+        async def submit(prepared, **kwargs):
+            attempts.append(prepared)
+            if len(attempts) == 1:
+                raise PredictInsufficientSharesError("Insufficient shares")
+            return await original(prepared, **kwargs)
+        client.submit_prepared_order = submit
+        engine, _ = setup(client)
+        await engine._handle_wallet_fill(event())
+        await client.prepared.wait()
         await engine._handle_wallet_fill(event("orderTransactionSuccess"))
-        await asyncio.wait_for(client.submitted.wait(), 0.5)
-        client.cumulative = Decimal("100")
+        await drain(engine)
+        assert len(attempts) == 2 and attempts[0] is attempts[1]
+        assert len(client.created) == 1
+    asyncio.run(run())
+
+
+def test_failure_during_balance_retry_stops_further_posts():
+    async def run():
+        client = EarlyClient()
+        rejected = asyncio.Event()
+        async def reject(*args, **kwargs):
+            rejected.set()
+            raise PredictInsufficientSharesError("Insufficient shares")
+        client.submit_prepared_order = AsyncMock(side_effect=reject)
+        engine, _ = setup(client)
+        await engine._handle_wallet_fill(event())
+        await rejected.wait()
+        await engine._handle_wallet_fill(event("orderTransactionFailed"))
+        await drain(engine)
+        assert client.submit_prepared_order.await_count == 1
+    asyncio.run(run())
+
+
+def test_failed_buy_with_unknown_post_still_monitors_original_sell():
+    async def run():
+        client = EarlyClient()
+        sent, release = asyncio.Event(), asyncio.Event()
+        async def unknown(prepared, **kwargs):
+            client.created.append(prepared.quote)
+            client.intent = ManagedOrder("hash", prepared.quote, 0, OrderStatus.UNKNOWN,
+                                        "hash", is_emergency_exit=True,
+                                        exit_context=kwargs["exit_context"])
+            sent.set()
+            await release.wait()
+            raise PredictOrderSubmissionUnknown(client.intent)
+        async def read(_):
+            return replace(client.intent, status=OrderStatus.EXPIRED, filled_size=Decimal("40"))
+        client.submit_prepared_order = unknown
+        client.get_order_by_hash = read
+        engine, _ = setup(client)
+        await engine._handle_wallet_fill(event())
+        await sent.wait()
+        await engine._handle_wallet_fill(event("orderTransactionFailed"))
         release.set()
         await drain(engine)
         assert len(client.created) == 1
     asyncio.run(run())
 
 
-def test_actual_partial_fill_never_uses_larger_prepared_quantity():
+def journal_client(tmp_path):
+    journal = PredictClient(Settings(order_journal_path=str(tmp_path / "orders.json")), False)
+    client = EarlyClient()
+    client.persist_tracked_order = journal.persist_tracked_order
+    return journal, client
+
+
+def restore(journal, client):
+    engine, _ = setup(EarlyClient())
+    engine.client = client
+    engine.open_orders.clear()
+    for order in journal.load_tracked_orders():
+        engine._register_order(order)
+    return engine
+
+
+def test_restart_between_plan_and_post_resumes_once(tmp_path):
     async def run():
-        client = EarlyClient()
-        engine, _ = setup(client)
-        await engine._handle_wallet_fill(event())
-        await client.prepared.wait()
-        client.cumulative = Decimal("40")
-        await asyncio.wait_for(client.submitted.wait(), 0.5)
-        await engine._handle_wallet_fill(event("orderTransactionSuccess", "40"))
-        await engine._handle_wallet_fill(event("orderTransactionSuccess", "60", "s2"))
-        await drain(engine)
-        assert [q.size for q in client.created] == [Decimal("40"), Decimal("60")]
-        assert not client.signatures_used  # 100-share signature must be discarded
-    asyncio.run(run())
-
-
-def test_failed_settlement_stops_early_checks_and_never_posts():
-    async def run():
-        client = EarlyClient()
-        engine, source = setup(client)
-        await engine._handle_wallet_fill(event())
-        await client.prepared.wait()
-        await engine._handle_wallet_fill(event("orderTransactionFailed"))
-        client.cumulative = Decimal("100")
-        await asyncio.gather(*engine._early_fill_tasks.values(), return_exceptions=True)
-        await asyncio.gather(*engine._emergency_cancel_tasks.values())
-        assert source.filled_size == 0
-        assert not client.created
-        assert not engine._early_prepare_tasks
-    asyncio.run(run())
-
-
-def test_no_extra_request_budget_still_prepares_and_ws_exit_works():
-    async def run():
-        client = EarlyClient()
-        client.allow = False
-        engine, _ = setup(client)
-        await engine._handle_wallet_fill(event())
-        await client.prepared.wait()
-        await engine._handle_wallet_fill(event("orderTransactionSuccess"))
-        await drain(engine)
-        assert client.reads == 0
-        assert len(client.created) == 1
-        assert len(client.signatures_used) == 1
-    asyncio.run(run())
-
-
-def test_wrong_source_hash_is_not_accepted_as_fill():
-    async def run():
-        client = EarlyClient()
-        original = client.get_order_by_hash
-
-        async def wrong_read(key):
-            return replace(await original(key), order_hash="someone-else", filled_size=Decimal("100"))
-
-        client.get_order_by_hash = wrong_read
-        engine, _ = setup(client)
-        await engine._handle_wallet_fill(event())
-        await drain(engine)
-        assert not client.created
-    asyncio.run(run())
-
-
-def test_slow_probe_is_bounded_and_does_not_block_ws_processing():
-    async def run():
-        client = EarlyClient()
-        started = asyncio.Event()
-
-        async def never_returns(_):
-            started.set()
-            await asyncio.Event().wait()
-
-        client.get_order_by_hash = never_returns
-        engine, _ = setup(client)
-        await engine._handle_wallet_fill(event())
-        await started.wait()
-        await asyncio.wait_for(drain(engine), 0.3)
-        assert not client.created
-        assert not engine._early_fill_tasks
-        assert not engine._early_prepare_tasks
-        await engine._handle_wallet_fill(event("orderTransactionSuccess"))
-        await drain(engine)
+        journal, client = journal_client(tmp_path)
+        first, _ = setup(client)
+        first._start_exit_plan = lambda *args: None
+        await first._handle_wallet_fill(event())
+        await drain(first)
+        second = restore(journal, client)
+        second._resume_emergency_exits()
+        second._resume_emergency_exits()
+        await drain(second)
+        await second._handle_wallet_fill(event("orderTransactionSuccess"))
+        await drain(second)
         assert len(client.created) == 1
     asyncio.run(run())
 
 
-def test_failed_signature_preparation_does_not_disable_confirmed_exit():
+def test_restart_after_completed_speculative_sell_never_replays(tmp_path):
     async def run():
-        client = EarlyClient()
-        client.prepare_order = AsyncMock(side_effect=RuntimeError("metadata timeout"))
-        engine, _ = setup(client)
-        await engine._handle_wallet_fill(event())
-        await asyncio.sleep(0)
-        await engine._handle_wallet_fill(event("orderTransactionSuccess"))
-        await drain(engine)
-        assert len(client.created) == 1
-    asyncio.run(run())
-
-
-@pytest.mark.parametrize("ws_already_received", [False, True])
-def test_delayed_partial_ws_after_restart_never_sells_early_rest_fill_twice(tmp_path, ws_already_received):
-    async def run():
-        journal = PredictClient(Settings(order_journal_path=str(tmp_path / "orders.json")), False)
-        client = EarlyClient()
-        client.persist_tracked_order = journal.persist_tracked_order
-        engine, _ = setup(client)
-        await engine._handle_wallet_fill(WalletFillEvent(
-            "buy", Decimal("40"), "buy-hash", "early:40", "Early source-order reconciliation",
-            cumulative_filled_size=Decimal("40")))
-        await drain(engine)
-        if ws_already_received:
-            await engine._handle_wallet_fill(event("orderTransactionSuccess", "40"))
-        # New engine with no in-memory dedup sets, and a real journal round-trip.
-        restored = journal.load_tracked_orders()
-        second, _ = setup(client)
-        second.open_orders.clear()
-        second._wallet_fill_totals.clear()
-        for order in restored:
-            second._register_order(order)
+        journal, client = journal_client(tmp_path)
+        first, _ = setup(client)
+        await first._handle_wallet_fill(event(size="40"))
+        await drain(first)
+        second = restore(journal, client)
+        second.open_orders = {k: v for k, v in second.open_orders.items() if v.quote.side == Side.BUY}
+        second._resume_emergency_exits()
+        await second._handle_wallet_fill(event(size="40"))
         await second._handle_wallet_fill(event("orderTransactionSuccess", "40"))
         await drain(second)
         assert [q.size for q in client.created] == [Decimal("40")]
-        await second._handle_wallet_fill(event("orderTransactionSuccess", "60", "s2"))
+        await second._handle_wallet_fill(event(size="60", settlement="s2"))
         await drain(second)
         assert [q.size for q in client.created] == [Decimal("40"), Decimal("60")]
+    asyncio.run(run())
+
+
+def test_restart_unknown_post_reconciles_hash_before_any_new_post(tmp_path):
+    async def run():
+        journal, client = journal_client(tmp_path)
+        first, source = setup(client)
+        first._start_exit_plan = lambda *args: None
+        await first._handle_wallet_fill(event())
+        await drain(first)
+        plan = source.exit_plans[0]
+        intent = ManagedOrder("hash", replace(source.quote, side=Side.SELL), 0,
+                              OrderStatus.UNKNOWN, "hash", is_emergency_exit=True, exit_context=plan)
+        journal.persist_tracked_order(intent)
+        client.get_order_by_hash = AsyncMock(return_value=replace(
+            intent, status=OrderStatus.FILLED, filled_size=Decimal("100")))
+        second = restore(journal, client)
+        second._resume_emergency_exits()
+        await drain(second)
+        await second._handle_wallet_fill(event("orderTransactionSuccess"))
+        await drain(second)
+        assert not client.created
+        client.get_order_by_hash.assert_awaited_once()
+    asyncio.run(run())
+
+
+def test_old_journal_fill_is_not_resold_on_upgrade():
+    async def run():
+        client = EarlyClient()
+        engine, source = setup(client)
+        source.filled_size = Decimal("40")
+        await engine._handle_wallet_fill(event("orderTransactionSuccess", "40"))
+        await engine._handle_wallet_fill(event(size="60", settlement="s2"))
+        await drain(engine)
+        assert [q.size for q in client.created] == [Decimal("60")]
+    asyncio.run(run())
+
+
+def test_restart_after_fill_persisted_before_plan_allocation(tmp_path):
+    async def run():
+        journal, client = journal_client(tmp_path)
+        first, source = setup(client)
+        source.exit_baseline_size = Decimal("0")
+        source.filled_size = Decimal("40")
+        source.wallet_filled_size = Decimal("40")
+        source.wallet_settlement_ids.add("buy-hash:s1")
+        journal.persist_tracked_order(source)
+        second = restore(journal, client)
+        second._resume_emergency_exits()
+        await drain(second)
+        await second._handle_wallet_fill(event("orderTransactionSuccess", "40"))
+        await drain(second)
+        assert [q.size for q in client.created] == [Decimal("40")]
     asyncio.run(run())

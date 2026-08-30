@@ -30,7 +30,8 @@ class EmergencyClient:
     async def cancel_market_buy_orders(self, market_id: str) -> None:
         await self.cancel_all_orders(market_id)
 
-    async def create_order(self, quote: Quote, *, post_only: bool = True, exit_context=None) -> ManagedOrder:
+    async def create_order(self, quote: Quote, *, post_only: bool = True, exit_context=None,
+                           should_submit=None) -> ManagedOrder:
         self.created.append((quote, post_only))
         return ManagedOrder(order_id="emergency-exit", quote=quote, created_at=0,
                             status=OrderStatus.FILLED, filled_size=quote.size,

@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from predict_mm.client import (
     PredictClient, PredictInsufficientSharesError, PredictOrderSubmissionUnknown,
     PredictRateLimitError,
+    PredictSubmissionAborted,
 )
 from predict_mm.config import Settings
 from predict_mm.models import ExitContext, ManagedOrder, OrderStatus, Quote, Side
@@ -227,6 +228,63 @@ def test_expired_unused_signature_is_refreshed_before_first_post(tmp_path):
         assert float(sent["expiration"]) > time() + 200
         assert client._request.await_count == 1
     asyncio.run(run())
+
+
+def test_failed_source_during_rate_wait_never_posts(tmp_path):
+    async def run():
+        client = SignedClient(Settings(api_key="key", jwt_token="jwt",
+                                       order_journal_path=str(tmp_path / "orders.json")), False)
+        active = True
+        async def pace():
+            nonlocal active
+            active = False
+        client._pace_emergency_submission = pace
+        client._request = AsyncMock()
+        with pytest.raises(PredictSubmissionAborted):
+            await client.create_order(Quote("1", Side.SELL, Decimal("0.001"), Decimal("3")),
+                                      post_only=False, exit_context=context(),
+                                      should_submit=lambda: active)
+        client._request.assert_not_called()
+        assert not client.load_tracked_orders()
+    asyncio.run(run())
+
+
+def test_failed_source_during_expiry_resign_never_posts(tmp_path):
+    async def run():
+        client = SignedClient(Settings(api_key="key", jwt_token="jwt",
+                                       order_journal_path=str(tmp_path / "orders.json")), False)
+        prepared = await client.prepare_order(Quote("1", Side.SELL, Decimal("0.001"), Decimal("3")))
+        prepared.payload["data"]["order"]["expiration"] = str(int(time()) + 1)
+        active = True
+        original = client.prepare_order
+        async def resign(*args, **kwargs):
+            nonlocal active
+            active = False
+            return await original(*args, **kwargs)
+        client.prepare_order = resign
+        client._request = AsyncMock()
+        with pytest.raises(PredictSubmissionAborted):
+            await client.submit_prepared_order(prepared, should_submit=lambda: active)
+        client._request.assert_not_called()
+    asyncio.run(run())
+
+
+def test_pending_source_plan_and_latest_sell_survive_pruning(tmp_path):
+    client = PredictClient(Settings(order_journal_path=str(tmp_path / "orders.json")), False)
+    plan = replace(context(), source_settlement_key="source-buy:s1")
+    source = ManagedOrder("source-buy", Quote("1", Side.BUY, Decimal("0.6"), Decimal("3")), 0,
+                          matched_settlements={"source-buy:s1": Decimal("3")},
+                          exit_plans=[plan], exit_baseline_size=Decimal("0"))
+    client.persist_tracked_order(source)
+    sell = ManagedOrder("sell", replace(source.quote, side=Side.SELL), 0, OrderStatus.FILLED,
+                        filled_size=Decimal("3"), is_emergency_exit=True, exit_context=plan)
+    client.persist_tracked_order(sell)
+    for i in range(502):
+        client.persist_tracked_order(ManagedOrder(str(i), source.quote, 0))
+    restored = {o.order_id: o for o in client.load_tracked_orders()}
+    assert restored["source-buy"].exit_plans == [plan]
+    assert restored["sell"].filled_size == 3
+    assert restored["source-buy"].matched_settlements == source.matched_settlements
 
 
 def test_same_prepared_signature_cannot_be_posted_concurrently(tmp_path):

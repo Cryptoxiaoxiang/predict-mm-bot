@@ -17,7 +17,7 @@ from predict_mm.client import (
     PredictInsufficientSharesError,
     PredictOrderSubmissionUnknown,
     PredictRateLimitError,
-    PreparedOrder,
+    PredictSubmissionAborted,
 )
 from predict_mm.config import BotConfig, MarketConfig
 from predict_mm.models import (
@@ -83,16 +83,10 @@ class MarketMakerEngine:
         self._pending_sell_settlements: dict[str, set[str]] = {}
         self._exit_wakeups: dict[str, asyncio.Event] = {}
         self._match_received_at: dict[str, float] = {}
-        self._early_fill_tasks: dict[str, asyncio.Task[None]] = {}
-        self._early_prepare_tasks: dict[tuple[str, Decimal], asyncio.Task[PreparedOrder]] = {}
-        self._early_failed_orders: set[str] = set()
-        self._early_probe_window_seconds = 10.0
-        self._early_probe_interval_seconds = 0.5
-        self._early_prepare_slots = asyncio.Semaphore(2)
+        self._active_exit_groups: set[str] = set()
         self._exit_poll_seconds = 0.5
         self._halted_markets: set[str] = set()
         self._prepared_emergency_markets: set[str] = set()
-        self._submitted_fill_settlements: set[str] = set()
         self._handled_fill_settlements: set[str] = set()
         self._market_tick_sizes: dict[str, Decimal] = {}
         self._latest_orderbooks: dict[str, OrderBook] = {}
@@ -256,10 +250,6 @@ class MarketMakerEngine:
                 self._orderbook_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await self._orderbook_task
-            early_tasks = [*self._early_fill_tasks.values(), *self._early_prepare_tasks.values()]
-            for task in early_tasks:
-                task.cancel()
-            await asyncio.gather(*early_tasks, return_exceptions=True)
             for task in list(self._emergency_tasks):
                 task.cancel()
             if self._emergency_tasks:
@@ -687,6 +677,13 @@ class MarketMakerEngine:
             existing.filled_size = max(existing.filled_size, order.filled_size)
             existing.wallet_filled_size = max(existing.wallet_filled_size, order.wallet_filled_size)
             existing.wallet_settlement_ids.update(order.wallet_settlement_ids)
+            existing.matched_settlements.update(order.matched_settlements)
+            existing.failed_settlement_ids.update(order.failed_settlement_ids)
+            existing.completed_exit_groups.update(order.completed_exit_groups)
+            if existing.exit_baseline_size is None:
+                existing.exit_baseline_size = order.exit_baseline_size
+            groups = {plan.group_id for plan in existing.exit_plans}
+            existing.exit_plans.extend(plan for plan in order.exit_plans if plan.group_id not in groups)
             registered = existing
         wallet_key = registered.order_hash or registered.order_id
         self._wallet_fill_totals[wallet_key] = max(
@@ -1081,6 +1078,10 @@ class MarketMakerEngine:
             return
 
         order_key = order.order_hash or order.order_id
+        if order.quote.side == Side.BUY and order.exit_baseline_size is None:
+            # Existing journals used filled_size as their exit dedup counter.
+            # Do not re-sell those older fills when upgrading to durable plans.
+            order.exit_baseline_size = order.filled_size
         self._wallet_fill_totals.setdefault(order_key, order.wallet_filled_size)
         settlement_key = order_key + ":" + (event.settlement_id or (
             f"{event.order_id}:{event.order_hash or ''}:{fill_size}"
@@ -1098,31 +1099,31 @@ class MarketMakerEngine:
                 self._wake_exit(order)
                 return
         elif event.event_type == "orderTransactionFailed":
-            self._early_failed_orders.add(order_key)
-            probe = self._early_fill_tasks.get(order_key)
-            if probe is not None:
-                probe.cancel()
-            self._discard_early_preparation(order_key)
-            logger.warning("Buy settlement failed: order=%s; no sell submitted", order.order_id)
+            if settlement_key in order.wallet_settlement_ids:
+                return
+            order.failed_settlement_ids.add(settlement_key)
+            self._remember_order(order)
+            logger.warning("Buy settlement failed: order=%s settlement=%s; stop unsent retries, "
+                           "continue reconciling any sell already submitted",
+                           order.order_id, settlement_key)
             return
 
-        # Submitted is not proof of ownership. Prepare immediately and query the
-        # SOURCE ORDER's actual cumulative fill; do not sell an estimated match
-        # size or infer a fill from unrelated/pre-existing account positions.
+        # User-authorized speculative exit: a match starts an immediate POST,
+        # without treating that match as a settled buy. Existing holdings may
+        # satisfy this sell. Durable plans prevent later WS/REST duplication.
         if event.event_type == "orderTransactionSubmitted":
-            if settlement_key in self._submitted_fill_settlements:
+            if (settlement_key in order.matched_settlements
+                    or settlement_key in order.wallet_settlement_ids
+                    or settlement_key in order.failed_settlement_ids):
                 return
-            self._submitted_fill_settlements.add(settlement_key)
+            order.matched_settlements[settlement_key] = min(fill_size, order.quote.size)
             self._match_received_at.setdefault(order_key, event.received_at)
             logger.critical(
-                "Buy order %s matched; canceling market quotes while on-chain settlement completes",
+                "Buy order %s matched; attempting emergency sell BEFORE buy settlement success",
                 order.order_id,
             )
             self._ensure_emergency_cancel(order)
-            self._start_early_exit_preparation(order, fill_size)
-            return
-
-        if event.event_type == "Early source-order reconciliation" and order_key in self._early_failed_orders:
+            self._schedule_uncovered_exit(order, settlement_key)
             return
 
         # A success event can race with a local cancellation. The order's local
@@ -1139,6 +1140,8 @@ class MarketMakerEngine:
             cumulative = self._wallet_fill_totals[order_key]
             order.wallet_filled_size = cumulative
             order.wallet_settlement_ids.add(settlement_key)
+            if not order.is_emergency_exit:
+                order.matched_settlements[settlement_key] = min(fill_size, order.quote.size)
         fill_size = max(Decimal("0"), min(cumulative, order.quote.size) - order.filled_size)
         if fill_size <= Decimal("0"):
             self._remember_order(order)
@@ -1155,7 +1158,7 @@ class MarketMakerEngine:
             self._wake_exit(order)
             return
         logger.critical(
-            "Detected %s for buy order %s; starting emergency exit",
+            "Detected %s for buy order %s; recording settled quantity and checking exit coverage",
             event.event_type,
             order.order_id,
         )
@@ -1166,132 +1169,56 @@ class MarketMakerEngine:
             round((event.received_at - matched_at) * 1000, 1) if matched_at is not None else "unknown",
         )
         self._ensure_emergency_cancel(order)
-        task = asyncio.create_task(self._emergency_exit(order, fill_size))
+        self._schedule_uncovered_exit(order)
+
+    def _schedule_uncovered_exit(self, order: ManagedOrder, settlement_key: str | None = None) -> None:
+        matched = sum((size for key, size in order.matched_settlements.items()
+                       if key not in order.failed_settlement_ids), Decimal("0"))
+        target = min(order.quote.size, max(order.filled_size, matched))
+        covered = (order.exit_baseline_size or Decimal("0")) + sum(
+            (plan.target_size for plan in order.exit_plans
+             if plan.source_settlement_key not in order.failed_settlement_ids), Decimal("0"),
+        )
+        size = target - covered
+        if size > 0:
+            plan = ExitContext(uuid4().hex, order.order_id, size,
+                               source_settlement_key=settlement_key)
+            order.exit_plans.append(plan)
+            # Persist allocation BEFORE scheduling the task / signing / POST.
+            self._remember_order(order)
+            self._start_exit_plan(order, plan)
+        else:
+            self._remember_order(order)
+
+    def _start_exit_plan(self, source: ManagedOrder, plan: ExitContext,
+                         resume: ManagedOrder | None = None) -> None:
+        if plan.group_id in self._active_exit_groups:
+            return
+        self._active_exit_groups.add(plan.group_id)
+        task = asyncio.create_task(self._emergency_exit(
+            source, plan.target_size, resume=resume, plan=plan,
+        ))
         self._emergency_tasks.add(task)
-        task.add_done_callback(self._emergency_tasks.discard)
+        def finished(done: asyncio.Task[None]) -> None:
+            self._active_exit_groups.discard(plan.group_id)
+            self._emergency_tasks.discard(done)
+            if not done.cancelled() and done.exception() is not None:
+                logger.critical("Emergency exit worker failed; durable plan %s retained: %s",
+                                plan.group_id, done.exception())
+        task.add_done_callback(finished)
 
-    def _discard_early_preparation(self, order_key: str) -> None:
-        for key in [key for key in self._early_prepare_tasks if key[0] == order_key]:
-            task = self._early_prepare_tasks.pop(key)
-            task.cancel()
+    def _exit_source(self, context: ExitContext) -> ManagedOrder | None:
+        return self.open_orders.get(context.source_order_id)
 
-    def _start_early_exit_preparation(self, order: ManagedOrder, size: Decimal) -> None:
-        prepare = getattr(self.client, "prepare_order", None)
-        submit = getattr(self.client, "submit_prepared_order", None)
-        if self.config.dry_run or not callable(prepare) or not callable(submit):
-            return
-        key = order.order_hash or order.order_id
-        if key in self._early_failed_orders:
-            return
-        size = min(size, order.quote.size - order.filled_size)
-        if size <= 0:
-            return
-        cache_key = (key, size)
-        if cache_key not in self._early_prepare_tasks:
-            task = asyncio.create_task(self._prepare_matched_sell(order, size))
-            # Retrieve failures even if confirmation never arrives; the normal
-            # path will sign again and must not be blocked by a failed preload.
-            task.add_done_callback(lambda done: None if done.cancelled() else done.exception())
-            self._early_prepare_tasks[cache_key] = task
-        task = self._early_fill_tasks.get(key)
-        if task is None or task.done():
-            task = asyncio.create_task(self._probe_matched_buy(order))
-            self._early_fill_tasks[key] = task
-            task.add_done_callback(lambda done: self._finish_early_probe(key, done))
+    def _exit_source_failed(self, context: ExitContext) -> bool:
+        source = self._exit_source(context)
+        return bool(source and context.source_settlement_key in source.failed_settlement_ids)
 
-    def _finish_early_probe(self, key: str, task: asyncio.Task[None]) -> None:
-        if self._early_fill_tasks.get(key) is task:
-            self._early_fill_tasks.pop(key, None)
-        if not task.cancelled():
-            error = task.exception()
-            if error is not None:
-                logger.warning("Early fill worker stopped for %s; WS/REST fallback remains active: %s",
-                               key, error)
-
-    async def _prepare_matched_sell(self, order: ManagedOrder, size: Decimal) -> PreparedOrder:
-        async with self._early_prepare_slots:
-            price = await self._emergency_exit_price(order.quote.market_id)
-            prepared = await self.client.prepare_order(
-                replace(order.quote, side=Side.SELL, price=price, size=size), post_only=False,
-            )
-            logger.info("Emergency sell prepared locally after match: buy=%s shares=%s; not submitted",
-                        order.order_id, size)
-            return prepared
-
-    async def _probe_matched_buy(self, order: ManagedOrder) -> None:
-        """Bounded, budgeted confirmation path independent of quote batches.
-
-        REST may report a fill before the WS success notification. Reuse the
-        existing cumulative-fill deduplication path in either arrival order.
-        No speculative quantity is recorded as filled and no position is sold
-        based on account balance alone. Unavailable proof falls back to WS.
-        """
-        key = order.order_hash or order.order_id
-        deadline = monotonic() + self._early_probe_window_seconds
-        allow_probe = getattr(self.client, "allow_early_fill_probe", None)
-        read = getattr(self.client, "get_order_by_hash", None)
-        try:
-            if not order.order_hash or not callable(read) or not callable(allow_probe):
-                return
-            while (not self._stop.is_set() and monotonic() < deadline
-                   and order.filled_size < order.quote.size and key not in self._early_failed_orders):
-                if allow_probe():
-                    try:
-                        remote = await asyncio.wait_for(
-                            read(order.order_hash), timeout=max(0.001, deadline - monotonic())
-                        )
-                        if (remote is not None and remote.order_hash == order.order_hash
-                                and remote.quote.market_id == order.quote.market_id
-                                and remote.quote.side == Side.BUY):
-                            cumulative = min(remote.filled_size, order.quote.size)
-                            delta = cumulative - order.filled_size
-                            if delta > 0 and not self._stop.is_set():
-                                logger.info("Early source-order fill confirmed: buy=%s cumulative=%s; "
-                                            "starting exit without waiting for WS success",
-                                            order.order_id, cumulative)
-                                await self._handle_wallet_fill(WalletFillEvent(
-                                    order_id=order.order_id, order_hash=order.order_hash,
-                                    filled_size=delta, settlement_id=f"early:{key}:{cumulative}",
-                                    event_type="Early source-order reconciliation",
-                                    cumulative_filled_size=cumulative,
-                                ))
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as error:  # noqa: BLE001
-                        logger.info("Early fill check unavailable for %s; retaining WS/REST fallback: %s",
-                                    order.order_id, error)
-                        if isinstance(error, PredictRateLimitError):
-                            return
-                with suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(self._stop.wait(), self._early_probe_interval_seconds)
-        finally:
-            # Give scheduled exits one event-loop turn to take their signature.
-            await asyncio.sleep(0)
-            self._discard_early_preparation(key)
-
-    async def _take_prepared_sell(self, order: ManagedOrder, size: Decimal, price: Decimal) -> PreparedOrder | None:
-        key = (order.order_hash or order.order_id, size)
-        task = self._early_prepare_tasks.pop(key, None)
-        if task is None or task.cancelled():
-            return None
-        try:
-            # A slow metadata/preparation request must not delay a confirmed exit.
-            done, _ = await asyncio.wait({task}, timeout=0.05)
-            if not done:
-                task.cancel()
-                return None
-            prepared = task.result()
-            if (prepared.quote.price == price and prepared.quote.size == size
-                    and prepared.quote.side == Side.SELL and not prepared.used):
-                return prepared
-        except asyncio.CancelledError:
-            if asyncio.current_task().cancelling():
-                task.cancel()
-                raise
-        except Exception as error:  # noqa: BLE001
-            logger.info("Pre-signing unavailable for %s; signing confirmed exit normally: %s",
-                        order.order_id, error)
-        return None
+    def _finish_exit_plan(self, context: ExitContext) -> None:
+        source = self._exit_source(context)
+        if source is not None:
+            source.completed_exit_groups.add(context.group_id)
+            self._remember_order(source)
 
     def _order_from_wallet_context(
         self, event: WalletFillEvent | WalletOrderStatusEvent
@@ -1465,26 +1392,39 @@ class MarketMakerEngine:
             context = order.exit_context
             assert context is not None
             if context.sold_before + order.filled_size >= context.target_size:
+                self._finish_exit_plan(context)
                 continue
             self._halted_markets.add(order.quote.market_id)
             logger.warning("Resuming emergency sell confirmation for order %s", order.order_id)
-            task = asyncio.create_task(self._emergency_exit(order, context.target_size, resume=order))
-            self._emergency_tasks.add(task)
-            task.add_done_callback(self._emergency_tasks.discard)
+            self._start_exit_plan(self._exit_source(context) or order, context, resume=order)
+        # Recover the crash window between persisting a source plan and the
+        # client's durable pre-POST intent. A completed plan is never replayed.
+        for source in list(self.open_orders.values()):
+            for plan in source.exit_plans:
+                if plan.group_id in latest or plan.group_id in source.completed_exit_groups:
+                    continue
+                self._halted_markets.add(source.quote.market_id)
+                self._start_exit_plan(source, plan)
+            if source.quote.side == Side.BUY and source.exit_baseline_size is not None:
+                # A crash may occur after persisting a confirmed fill but
+                # before its exit allocation is written.
+                self._schedule_uncovered_exit(source)
 
     async def _emergency_exit(
         self, filled_order: ManagedOrder, fill_size: Decimal, *, resume: ManagedOrder | None = None,
+        plan: ExitContext | None = None,
     ) -> None:
         key = (filled_order.quote.market_id, filled_order.quote.token_id or filled_order.quote.outcome)
         async with self._exit_locks.setdefault(key, asyncio.Lock()):
-            await self._run_emergency_exit(filled_order, fill_size, resume=resume)
+            await self._run_emergency_exit(filled_order, fill_size, resume=resume, plan=plan)
 
     async def _run_emergency_exit(
         self, filled_order: ManagedOrder, fill_size: Decimal, *, resume: ManagedOrder | None = None,
+        plan: ExitContext | None = None,
     ) -> None:
         started_at = monotonic()
         market_id = filled_order.quote.market_id
-        context = resume.exit_context if resume else ExitContext(
+        context = resume.exit_context if resume else plan or ExitContext(
             group_id=uuid4().hex, source_order_id=filled_order.order_id, target_size=fill_size,
         )
         assert context is not None
@@ -1492,9 +1432,9 @@ class MarketMakerEngine:
         current = resume
         self._ensure_emergency_cancel(filled_order)
         exit_price = await self._emergency_exit_price(market_id)
-        prepared = None if resume else await self._take_prepared_sell(filled_order, fill_size, exit_price)
+        prepared = None
         logger.critical(
-            "BUY order filled on %s; canceling market quotes and selling %s "
+            "Emergency exit started on %s; canceling market quotes and attempting to sell %s "
             "at emergency limit %s",
             market_id,
             fill_size,
@@ -1506,6 +1446,7 @@ class MarketMakerEngine:
                 sold += await self._monitor_emergency_sell(current)
                 current = None
                 if sold >= context.target_size:
+                    self._finish_exit_plan(context)
                     logger.critical(
                         "Emergency exit complete: market=%s source_order=%s sold=%s monitor_elapsed_ms=%.1f",
                         market_id, context.source_order_id, sold, (monotonic() - started_at) * 1000,
@@ -1517,17 +1458,40 @@ class MarketMakerEngine:
                     await asyncio.wait_for(self._stop.wait(), timeout=self._emergency_retry_base_seconds)
                 if self._stop.is_set():
                     return
+            if self._exit_source_failed(context):
+                self._finish_exit_plan(context)
+                logger.warning("Stop unsent emergency retries: source settlement failed; group=%s",
+                               context.group_id)
+                return
             attempt += 1
             self._ensure_emergency_cancel(filled_order)
             try:
+                # Sign as part of the immediate submission, keeping the same
+                # signature for explicit balance/429 rejections only.
+                prepare = getattr(self.client, "prepare_order", None)
+                submit = getattr(self.client, "submit_prepared_order", None)
+                if prepared is None and callable(prepare) and callable(submit) and not self.config.dry_run:
+                    prepared = await prepare(
+                        replace(filled_order.quote, side=Side.SELL, price=exit_price,
+                                size=context.target_size - sold), post_only=False,
+                    )
+                kwargs = {"exit_context": context}
+                if context.source_settlement_key is not None:
+                    kwargs["should_submit"] = lambda: (
+                        not self._stop.is_set() and not self._exit_source_failed(context)
+                    )
                 if prepared is not None:
-                    exit_order = await self.client.submit_prepared_order(prepared, exit_context=context)
+                    exit_order = await self.client.submit_prepared_order(prepared, **kwargs)
                 else:
                     exit_order = await self.client.create_order(
                         replace(filled_order.quote, side=Side.SELL, price=exit_price,
                                 size=context.target_size - sold),
-                        post_only=False, exit_context=context,
+                        post_only=False, **kwargs,
                     )
+            except PredictSubmissionAborted:
+                if self._exit_source_failed(context):
+                    self._finish_exit_plan(context)
+                return
             except PredictOrderSubmissionUnknown as error:
                 prepared = None
                 current = self._register_order(error.order)

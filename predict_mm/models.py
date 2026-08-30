@@ -69,6 +69,7 @@ class ExitContext:
     source_order_id: str
     target_size: Decimal
     sold_before: Decimal = Decimal("0")
+    source_settlement_key: str | None = None
 
 
 @dataclass
@@ -86,6 +87,13 @@ class ManagedOrder:
     # both so a late notification after restart cannot sell the same fill again.
     wallet_filled_size: Decimal = Decimal("0")
     wallet_settlement_ids: set[str] = field(default_factory=set)
+    # Matched is NOT settled. Keep speculative exit coverage separate from
+    # factual fills, and persist plans before an asynchronous sell can start.
+    matched_settlements: dict[str, Decimal] = field(default_factory=dict)
+    failed_settlement_ids: set[str] = field(default_factory=set)
+    exit_plans: list[ExitContext] = field(default_factory=list)
+    completed_exit_groups: set[str] = field(default_factory=set)
+    exit_baseline_size: Decimal | None = None
 
     @property
     def age_seconds(self) -> float:

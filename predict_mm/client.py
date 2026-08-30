@@ -47,6 +47,10 @@ class PredictInsufficientSharesError(RuntimeError):
     """An explicit HTTP 400 rejected this sell before acceptance."""
 
 
+class PredictSubmissionAborted(RuntimeError):
+    """The source match failed or shutdown began before the POST was sent."""
+
+
 class PredictRateLimitError(RuntimeError):
     """An explicit HTTP 429; respect the server's cooldown."""
 
@@ -484,7 +488,10 @@ class PredictClient:
     async def create_order(
         self, quote: Quote, *, post_only: bool = True,
         exit_context: ExitContext | None = None,
+        should_submit: Callable[[], bool] | None = None,
     ) -> ManagedOrder:
+        if should_submit is not None and not should_submit():
+            raise PredictSubmissionAborted("Emergency submission no longer needed")
         if self.dry_run:
             order = ManagedOrder(order_id=f"dry-{uuid4().hex[:12]}", quote=quote, created_at=monotonic())
             self._dry_orders[order.order_id] = order
@@ -501,7 +508,9 @@ class PredictClient:
             return order
 
         prepared = await self.prepare_order(quote, post_only=post_only)
-        return await self.submit_prepared_order(prepared, exit_context=exit_context)
+        return await self.submit_prepared_order(
+            prepared, exit_context=exit_context, should_submit=should_submit,
+        )
 
     async def prepare_order(self, quote: Quote, *, post_only: bool = False) -> PreparedOrder:
         """Resolve metadata and sign without sending an order or changing holdings."""
@@ -513,6 +522,7 @@ class PredictClient:
 
     async def submit_prepared_order(
         self, prepared: PreparedOrder, *, exit_context: ExitContext | None = None,
+        should_submit: Callable[[], bool] | None = None,
     ) -> ManagedOrder:
         if prepared.used:
             raise RuntimeError("Prepared order already submitted; reconcile its hash, do not resubmit")
@@ -528,6 +538,10 @@ class PredictClient:
             # This signature has never been sent. It is safe to refresh it here.
             signed_order_payload = (await self.prepare_order(quote, post_only=post_only)).payload
         signed_order = signed_order_payload["data"]["order"]
+        # Recheck after every preparation/pacing await. Do not cancel a POST
+        # once sent: an uncertain response must still be reconciled by hash.
+        if should_submit is not None and not should_submit():
+            raise PredictSubmissionAborted("Source match failed before emergency POST")
         order_hash = str(signed_order.get("hash") or "")
         intent = ManagedOrder(
             order_id=order_hash, order_hash=order_hash or None, quote=quote,
@@ -856,6 +870,23 @@ class PredictClient:
                 return str(cursor)
         return None
 
+    @staticmethod
+    def _read_exit_context(context: dict) -> ExitContext:
+        return ExitContext(
+            group_id=context["group_id"], source_order_id=context["source_order_id"],
+            target_size=Decimal(context["target_size"]),
+            sold_before=Decimal(context.get("sold_before", "0")),
+            source_settlement_key=context.get("source_settlement_key"),
+        )
+
+    @staticmethod
+    def _write_exit_context(context: ExitContext) -> dict:
+        return {
+            "group_id": context.group_id, "source_order_id": context.source_order_id,
+            "target_size": str(context.target_size), "sold_before": str(context.sold_before),
+            "source_settlement_key": context.source_settlement_key,
+        }
+
     def load_tracked_orders(self) -> list[ManagedOrder]:
         """Restore bot-created orders, including orders removed from the public book."""
         if self.dry_run or not self._order_journal_path.exists():
@@ -892,14 +923,19 @@ class PredictClient:
                         filled_size=Decimal(str(record.get("filled_size") or "0")),
                         wallet_filled_size=Decimal(str(record.get("wallet_filled_size") or "0")),
                         wallet_settlement_ids=set(record.get("wallet_settlement_ids") or []),
+                        matched_settlements={
+                            key: Decimal(str(size)) for key, size in
+                            (record.get("matched_settlements") or {}).items()
+                        },
+                        failed_settlement_ids=set(record.get("failed_settlement_ids") or []),
+                        exit_plans=[self._read_exit_context(plan)
+                                    for plan in record.get("exit_plans", [])],
+                        completed_exit_groups=set(record.get("completed_exit_groups") or []),
+                        exit_baseline_size=Decimal(str(record["exit_baseline_size"]))
+                        if record.get("exit_baseline_size") is not None else None,
                         is_emergency_exit=bool(record.get("is_emergency_exit", False)),
                         expires_at=record.get("expires_at"),
-                        exit_context=ExitContext(
-                            group_id=context["group_id"],
-                            source_order_id=context["source_order_id"],
-                            target_size=Decimal(context["target_size"]),
-                            sold_before=Decimal(context["sold_before"]),
-                        ) if context else None,
+                        exit_context=self._read_exit_context(context) if context else None,
                     )
                 )
             except (KeyError, TypeError, ValueError) as error:
@@ -929,14 +965,15 @@ class PredictClient:
             "filled_size": str(order.filled_size),
             "wallet_filled_size": str(order.wallet_filled_size),
             "wallet_settlement_ids": sorted(order.wallet_settlement_ids),
+            "matched_settlements": {key: str(size) for key, size in order.matched_settlements.items()},
+            "failed_settlement_ids": sorted(order.failed_settlement_ids),
+            "exit_plans": [self._write_exit_context(plan) for plan in order.exit_plans],
+            "completed_exit_groups": sorted(order.completed_exit_groups),
+            "exit_baseline_size": str(order.exit_baseline_size)
+            if order.exit_baseline_size is not None else None,
             "is_emergency_exit": order.is_emergency_exit,
             "expires_at": order.expires_at,
-            "exit_context": {
-                "group_id": order.exit_context.group_id,
-                "source_order_id": order.exit_context.source_order_id,
-                "target_size": str(order.exit_context.target_size),
-                "sold_before": str(order.exit_context.sold_before),
-            } if order.exit_context else None,
+            "exit_context": self._write_exit_context(order.exit_context) if order.exit_context else None,
             "quote": {
                 "market_id": order.quote.market_id,
                 "side": order.quote.side.value,
@@ -965,6 +1002,16 @@ class PredictClient:
         for record in exits.values():
             if record.get("status") != OrderStatus.FILLED.value:
                 retained[record["order_id"]] = record
+        # A durable source plan may exist before its first POST. Keep it and
+        # its latest sell together until completion is recorded on the source.
+        for record in existing.values():
+            pending = {plan["group_id"] for plan in record.get("exit_plans", [])}
+            pending.difference_update(record.get("completed_exit_groups", []))
+            if pending:
+                retained[record["order_id"]] = record
+                for group in pending:
+                    if group in exits:
+                        retained[exits[group]["order_id"]] = exits[group]
         records = list(retained.values())
         self._order_journal_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self._order_journal_path.with_suffix(

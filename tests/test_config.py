@@ -1,4 +1,9 @@
-from predict_mm.config import load_config, update_dotenv_value
+from decimal import Decimal
+
+import pytest
+
+from predict_mm.config import depth_protection_config, load_config, update_dotenv_value
+from predict_mm.setup_wizard import WizardAnswers, build_config_text
 
 
 def test_update_dotenv_value_preserves_other_account_settings(tmp_path) -> None:
@@ -49,3 +54,27 @@ def test_load_config_reads_official_outcome_index_set(tmp_path) -> None:
 
     assert config.markets[0].outcome == "大 55.5"
     assert config.markets[0].outcome_index_set == 1
+
+
+def test_old_config_enables_depth_defaults_and_custom_settings_round_trip(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[[markets]]\nid="1"\n')
+    assert load_config(path).depth_protection.enabled is True
+    custom = depth_protection_config({"enabled": False, "cancel_min_shares": "250",
+                                      "resume_min_shares": "700", "drop_percent": "60",
+                                      "stable_seconds": 5, "cooldown_seconds": 20})
+    path.write_text(build_config_text(WizardAnswers(market_id="1", depth_protection=custom)))
+    assert load_config(path).depth_protection == custom
+    assert custom.cancel_min_shares == Decimal(250)
+
+
+@pytest.mark.parametrize("raw", [
+    {"cancel_min_shares": "NaN"}, {"resume_min_shares": "Infinity"},
+    {"cancel_size_multiplier": "0"}, {"resume_size_multiplier": "2"},
+    {"resume_min_shares": "200"}, {"drop_percent": "101"},
+    {"stable_seconds": float("inf")}, {"drop_window_seconds": -1},
+    {"cooldown_seconds": 301}, {"enabled": "false"},
+])
+def test_invalid_depth_settings_are_rejected(raw):
+    with pytest.raises(ValueError):
+        depth_protection_config(raw)

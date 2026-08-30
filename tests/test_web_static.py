@@ -1,6 +1,17 @@
 from pathlib import Path
 
 
+def test_depth_controls_save_nested_settings_and_load_status():
+    root = Path(__file__).parents[1] / "predict_mm" / "web_static"
+    html, js = (root / "index.html").read_text(), (root / "app.js").read_text()
+    for field in ("enabled", "cancel_min_shares", "cancel_size_multiplier", "resume_min_shares",
+                  "resume_size_multiplier", "drop_window_seconds", "drop_percent",
+                  "stable_seconds", "cooldown_seconds"):
+        assert f'name="depth_{field}"' in html
+    assert "values.depth_protection[key.slice(6)] = value" in js
+    assert "status.depth_protection" in js
+
+
 def test_dashboard_links_to_owner_x_profile() -> None:
     html = (
         Path(__file__).parents[1] / "predict_mm" / "web_static" / "index.html"
@@ -79,5 +90,5 @@ def test_selected_market_summary_shows_market_id_on_its_own_line() -> None:
     assert "identifier.textContent = `Market ID：${marketId}`" in javascript
     assert "summary.replaceChildren(selection, identifier)" in javascript
     assert ".selected-market-id { display: block;" in stylesheet
-    assert '/static/app.js?v=20260828-market-id' in html
-    assert '/static/styles.css?v=20260828-market-id' in html
+    assert '/static/app.js?v=20260831-depth-guard' in html
+    assert '/static/styles.css?v=20260831-depth-guard' in html

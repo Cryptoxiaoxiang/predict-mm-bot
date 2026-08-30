@@ -4,7 +4,7 @@ from decimal import Decimal as D
 from time import monotonic
 
 from predict_mm.client import PredictRateLimitError
-from predict_mm.config import BotConfig, RiskConfig, StrategyConfig
+from predict_mm.config import DepthProtectionConfig, BotConfig, RiskConfig, StrategyConfig
 from predict_mm.engine import MarketMakerEngine
 from predict_mm.models import Level, ManagedOrder, OrderBook, OrderStatus, Quote, Side
 from predict_mm.risk import RiskManager
@@ -27,7 +27,7 @@ class Client:
 
 def engine_for(client):
     return MarketMakerEngine(
-        BotConfig(cancel_all_on_start=False, cancel_all_on_shutdown=False), client,
+        BotConfig(depth_protection=DepthProtectionConfig(enabled=False),cancel_all_on_start=False, cancel_all_on_shutdown=False), client,
         PassiveMakerStrategy(StrategyConfig()), RiskManager(RiskConfig()),
     )
 

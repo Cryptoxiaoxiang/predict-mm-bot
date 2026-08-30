@@ -2,7 +2,7 @@ import asyncio
 from decimal import Decimal
 from time import monotonic
 
-from predict_mm.config import BotConfig, MarketConfig, RiskConfig, StrategyConfig
+from predict_mm.config import DepthProtectionConfig, BotConfig, MarketConfig, RiskConfig, StrategyConfig
 from predict_mm.engine import MarketMakerEngine
 from predict_mm.models import (
     Level,
@@ -52,7 +52,7 @@ async def handle_fill_and_wait(engine: MarketMakerEngine, event: WalletFillEvent
 def test_buy_fill_cancels_market_and_creates_emergency_sell() -> None:
     client = EmergencyClient()
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[MarketConfig(id="market-1")]),
         client=client,  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -89,7 +89,7 @@ def test_buy_fill_cancels_market_and_creates_emergency_sell() -> None:
 def test_emergency_sell_uses_point_zero_zero_one_for_finer_tick() -> None:
     client = EmergencyClient(tick_size=Decimal("0.001"))
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[MarketConfig(id="market-1")]),
         client=client,  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -133,7 +133,7 @@ def test_run_duration_stops_engine_and_cancels_orders() -> None:
 
     client = TimedRunClient()
     engine = IdleEngine(
-        config=BotConfig(
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),
             dry_run=True,
             poll_interval_seconds=1,
             run_duration_seconds=0.05,  # type: ignore[arg-type]
@@ -156,7 +156,7 @@ def test_run_duration_stops_engine_and_cancels_orders() -> None:
 def test_cancelled_buy_fill_still_exits_once_per_settlement() -> None:
     client = EmergencyClient()
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[MarketConfig(id="market-1")]),
         client=client,  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -206,7 +206,7 @@ def test_failed_submitted_cancel_is_retried_before_emergency_sell() -> None:
 
     client = RetryCancelClient()
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[MarketConfig(id="market-1")]),
         client=client,  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -269,7 +269,7 @@ def test_wallet_fill_uses_order_restored_from_safety_journal() -> None:
 
     client = JournalClient()
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[MarketConfig(id="market-1")]),
         client=client,  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -296,7 +296,7 @@ def test_wallet_fill_uses_order_restored_from_safety_journal() -> None:
 def test_unknown_buy_fill_is_recovered_from_wallet_event_details() -> None:
     client = EmergencyClient()
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[MarketConfig(id="market-1")]),
         client=client,  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -331,7 +331,7 @@ def test_unknown_buy_fill_is_recovered_from_wallet_event_details() -> None:
 def test_unknown_sell_fill_is_recovered_without_second_sell() -> None:
     client = EmergencyClient()
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[MarketConfig(id="market-1")]),
         client=client,  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -384,7 +384,7 @@ def test_submit_registers_each_order_before_concurrent_batch_finishes() -> None:
     async def exercise() -> None:
         client = ConcurrentClient()
         engine = MarketMakerEngine(
-            config=BotConfig(
+            config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),
                 markets=[MarketConfig(id="fast"), MarketConfig(id="slow")]
             ),
             client=client,  # type: ignore[arg-type]
@@ -426,7 +426,7 @@ def test_unknown_fill_falls_back_to_order_hash_lookup() -> None:
 
     client = RecoveryClient()
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[MarketConfig(id="market-1")]),
         client=client,  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -449,7 +449,7 @@ def test_unknown_fill_falls_back_to_order_hash_lookup() -> None:
 
 def test_active_orders_exposes_each_open_order() -> None:
     engine = MarketMakerEngine(
-        config=BotConfig(
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),
             markets=[MarketConfig(id="market-1", title="Will it happen?")]
         ),
         client=EmergencyClient(),  # type: ignore[arg-type]
@@ -495,7 +495,7 @@ def test_active_orders_exposes_each_open_order() -> None:
 
 def test_dashboard_hides_submission_until_predict_confirms_open() -> None:
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[MarketConfig(id="market-1")]),
         client=EmergencyClient(),  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -519,7 +519,7 @@ def test_rest_confirmation_promotes_pending_order_to_open() -> None:
             return None
 
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[MarketConfig(id="market-1")]),
         client=StatusClient(),  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -555,7 +555,7 @@ def test_unconfirmed_submission_is_removed_after_grace_period() -> None:
 
     client = StatusClient()
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[MarketConfig(id="market-1")]),
         client=client,  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -580,7 +580,7 @@ def test_wallet_rejection_removes_pending_order_from_working_set(caplog) -> None
             return None
 
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[MarketConfig(id="market-1")]),
         client=StatusClient(),  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -637,7 +637,7 @@ class RepriceClient:
 def test_market_batches_are_limited_to_twenty_and_rotate() -> None:
     markets = [MarketConfig(id=f"market-{index}") for index in range(45)]
     engine = MarketMakerEngine(
-        config=BotConfig(markets=markets),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=markets),
         client=RepriceClient(),  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -662,7 +662,7 @@ def test_market_batches_are_limited_to_twenty_and_rotate() -> None:
 def test_open_order_markets_are_scheduled_first_during_websocket_outage() -> None:
     markets = [MarketConfig(id=f"market-{index}") for index in range(25)]
     engine = MarketMakerEngine(
-        config=BotConfig(markets=markets),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=markets),
         client=RepriceClient(),  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -687,7 +687,7 @@ def test_connected_websocket_removes_open_order_markets_from_rest_batch() -> Non
     client = RepriceClient()
     client.orderbook_stream_connected = True
     engine = MarketMakerEngine(
-        config=BotConfig(markets=markets),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=markets),
         client=client,  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -709,7 +709,7 @@ def test_connected_websocket_removes_open_order_markets_from_rest_batch() -> Non
 def test_open_order_markets_use_rest_before_new_quotes_during_outage() -> None:
     markets = [MarketConfig(id=f"market-{index}") for index in range(25)]
     engine = MarketMakerEngine(
-        config=BotConfig(markets=markets),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=markets),
         client=RepriceClient(),  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -742,7 +742,7 @@ def test_same_market_yes_and_no_are_scheduled_independently() -> None:
         MarketConfig(id="market-1", outcome="NO"),
     ]
     engine = MarketMakerEngine(
-        config=BotConfig(markets=markets),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=markets),
         client=RepriceClient(),  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -768,7 +768,7 @@ def test_no_safe_quote_markets_are_temporarily_backed_off() -> None:
 
     client = EmptyBookClient()
     engine = MarketMakerEngine(
-        config=BotConfig(
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),
             dry_run=True,
             markets=[MarketConfig(id=f"market-{index}") for index in range(25)],
         ),
@@ -804,7 +804,7 @@ def test_orderbook_fetch_concurrency_is_limited_to_five() -> None:
 
     client = ConcurrentBookClient()
     engine = MarketMakerEngine(
-        config=BotConfig(
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),
             markets=[MarketConfig(id=f"market-{index}") for index in range(20)]
         ),
         client=client,  # type: ignore[arg-type]
@@ -830,7 +830,7 @@ def test_same_market_outcomes_share_one_orderbook_request() -> None:
 
     client = CountingBookClient()
     engine = MarketMakerEngine(
-        config=BotConfig(
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),
             markets=[
                 MarketConfig(id="market-1", outcome="YES"),
                 MarketConfig(id="market-1", outcome="NO"),
@@ -869,7 +869,7 @@ def test_order_submission_concurrency_is_limited_to_five() -> None:
 
     client = ConcurrentSubmitClient()
     engine = MarketMakerEngine(
-        config=BotConfig(
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),
             dry_run=True,
             markets=[MarketConfig(id=f"market-{index}") for index in range(20)],
         ),
@@ -894,7 +894,7 @@ def test_order_submission_concurrency_is_limited_to_five() -> None:
 def test_concurrent_submission_reservation_prevents_duplicate_quote() -> None:
     client = RepriceClient()
     engine = MarketMakerEngine(
-        config=BotConfig(
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),
             dry_run=True,
             markets=[
                 MarketConfig(id="market-1"),
@@ -914,7 +914,7 @@ def test_concurrent_submission_reservation_prevents_duplicate_quote() -> None:
 def test_tick_only_adds_the_missing_dual_outcome_quote() -> None:
     client = RepriceClient()
     engine = MarketMakerEngine(
-        config=BotConfig(
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),
             dry_run=True,
             markets=[MarketConfig(id="market-1", outcome="YES_NO", quote_size=Decimal("1"))],
         ),
@@ -952,7 +952,7 @@ def test_rejected_passive_quote_does_not_stop_tick_or_fill_monitoring(caplog) ->
 
     client = PartiallyFundedClient()
     engine = MarketMakerEngine(
-        config=BotConfig(
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),
             markets=[
                 MarketConfig(id="market-1"),
                 MarketConfig(id="market-2"),
@@ -978,7 +978,7 @@ def test_position_server_error_pauses_quote_cycle_without_stopping_engine(caplog
 
     client = PositionFailureClient()
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[MarketConfig(id="market-1")]),
         client=client,  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -995,7 +995,7 @@ def test_fill_reconciliation_is_fast_only_while_wallet_stream_is_disconnected() 
     client = EmergencyClient()
     client.wallet_stream_connected = False
     engine = MarketMakerEngine(
-        config=BotConfig(
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),
             poll_interval_seconds=2,
             markets=[MarketConfig(id="market-1")],
         ),
@@ -1022,7 +1022,7 @@ def test_shutdown_cancel_retries_without_raising(caplog) -> None:
 
     client = TemporaryCancelFailureClient()
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[MarketConfig(id="market-1")]),
         client=client,  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -1040,7 +1040,7 @@ def test_shutdown_cancel_retries_without_raising(caplog) -> None:
 def test_approached_buy_quote_is_canceled_and_repriced_in_same_tick() -> None:
     client = RepriceClient()
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[MarketConfig(id="market-1")]),
         client=client,  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig(min_edge_ticks=2)),
         risk=RiskManager(RiskConfig()),
@@ -1060,7 +1060,7 @@ def test_approached_buy_quote_is_canceled_and_repriced_in_same_tick() -> None:
 def test_approached_sell_quote_is_canceled() -> None:
     client = RepriceClient()
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[MarketConfig(id="market-1")]),
         client=client,  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -1085,7 +1085,7 @@ def test_approached_sell_quote_is_canceled() -> None:
 def test_approached_no_buy_uses_complementary_yes_ask() -> None:
     client = RepriceClient()
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="market-1", outcome="NO")]),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[MarketConfig(id="market-1", outcome="NO")]),
         client=client,  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -1110,7 +1110,7 @@ def test_approached_no_buy_uses_complementary_yes_ask() -> None:
 def test_minimum_tick_buy_is_kept_while_spread_is_only_one_tick() -> None:
     client = RepriceClient()
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[MarketConfig(id="market-1")]),
         client=client,  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -1135,7 +1135,7 @@ def test_minimum_tick_buy_is_kept_while_spread_is_only_one_tick() -> None:
 def test_minimum_tick_no_buy_is_kept_while_spread_is_only_one_tick() -> None:
     client = RepriceClient()
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="market-1", outcome="NO")]),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[MarketConfig(id="market-1", outcome="NO")]),
         client=client,  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -1167,7 +1167,7 @@ def test_minimum_tick_no_buy_is_kept_while_spread_is_only_one_tick() -> None:
 def test_minimum_tick_buy_resumes_normal_replacement_after_spread_widens() -> None:
     client = RepriceClient()
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[MarketConfig(id="market-1")]),
         client=client,  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -1194,7 +1194,7 @@ def test_minimum_tick_buy_ignores_lifetime_until_spread_widens() -> None:
     market = MarketConfig(id="market-1")
     strategy = PassiveMakerStrategy(StrategyConfig())
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[market], cancel_after_seconds=60),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[market], cancel_after_seconds=60),
         client=client,  # type: ignore[arg-type]
         strategy=strategy,
         risk=RiskManager(RiskConfig()),
@@ -1222,7 +1222,7 @@ def test_minimum_tick_buy_ignores_lifetime_until_spread_widens() -> None:
 def test_approached_custom_no_buy_uses_canonical_outcome_side() -> None:
     client = RepriceClient()
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="818058", outcome="HRTS")]),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[MarketConfig(id="818058", outcome="HRTS")]),
         client=client,  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -1260,7 +1260,7 @@ def test_temporary_cancel_failure_keeps_engine_running_and_order_open(caplog) ->
     market = MarketConfig(id="market-1")
     strategy = PassiveMakerStrategy(StrategyConfig())
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[market], cancel_after_seconds=1),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[market], cancel_after_seconds=1),
         client=client,  # type: ignore[arg-type]
         strategy=strategy,
         risk=RiskManager(RiskConfig()),
@@ -1292,7 +1292,7 @@ def test_unchanged_order_gets_one_extra_lifetime(caplog) -> None:
     market = MarketConfig(id="market-1")
     strategy = PassiveMakerStrategy(StrategyConfig())
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[market], cancel_after_seconds=10),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[market], cancel_after_seconds=10),
         client=client,  # type: ignore[arg-type]
         strategy=strategy,
         risk=RiskManager(RiskConfig()),
@@ -1330,7 +1330,7 @@ def test_order_is_refreshed_after_second_unchanged_lifetime() -> None:
     market = MarketConfig(id="market-1")
     strategy = PassiveMakerStrategy(StrategyConfig())
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[market], cancel_after_seconds=10),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[market], cancel_after_seconds=10),
         client=client,  # type: ignore[arg-type]
         strategy=strategy,
         risk=RiskManager(RiskConfig()),
@@ -1366,7 +1366,7 @@ def test_lifetime_refresh_does_not_cancel_another_outcome_on_same_market() -> No
     no_market = MarketConfig(id="market-1", outcome="NO")
     strategy = PassiveMakerStrategy(StrategyConfig())
     engine = MarketMakerEngine(
-        config=BotConfig(
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),
             markets=[yes_market, no_market],
             cancel_after_seconds=10,
         ),
@@ -1401,7 +1401,7 @@ def test_second_lifetime_refresh_requotes_in_same_tick() -> None:
     market = MarketConfig(id="market-1")
     strategy = PassiveMakerStrategy(StrategyConfig())
     engine = MarketMakerEngine(
-        config=BotConfig(
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),
             dry_run=True,
             markets=[market],
             cancel_after_seconds=10,
@@ -1434,7 +1434,7 @@ def test_order_is_refreshed_at_first_lifetime_when_target_changes() -> None:
     market = MarketConfig(id="market-1")
     strategy = PassiveMakerStrategy(StrategyConfig())
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[market], cancel_after_seconds=10),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[market], cancel_after_seconds=10),
         client=client,  # type: ignore[arg-type]
         strategy=strategy,
         risk=RiskManager(RiskConfig()),
@@ -1479,7 +1479,7 @@ def test_rest_reconciliation_recovers_missed_buy_fill() -> None:
 
     client = ReconciliationClient()
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[MarketConfig(id="market-1")]),
         client=client,  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),
@@ -1520,7 +1520,7 @@ def test_emergency_sell_retries_when_settled_shares_are_not_yet_available(caplog
 
     client = DelayedSharesClient()
     engine = MarketMakerEngine(
-        config=BotConfig(markets=[MarketConfig(id="market-1")]),
+        config=BotConfig(depth_protection=DepthProtectionConfig(enabled=False),markets=[MarketConfig(id="market-1")]),
         client=client,  # type: ignore[arg-type]
         strategy=PassiveMakerStrategy(StrategyConfig()),
         risk=RiskManager(RiskConfig()),

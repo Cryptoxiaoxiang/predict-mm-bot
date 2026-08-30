@@ -18,7 +18,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from predict_mm.client import PredictClient
-from predict_mm.config import Settings, load_config, update_dotenv_value
+from predict_mm.config import (
+    DepthProtectionConfig, Settings, depth_protection_config, load_config, update_dotenv_value,
+)
 from predict_mm.engine import MarketMakerEngine
 from predict_mm.logging import configure_logging
 from predict_mm.risk import RiskManager
@@ -37,6 +39,18 @@ class MarketPayload(BaseModel):
     quote_size: str = "100"
 
 
+class DepthProtectionPayload(BaseModel):
+    enabled: bool = True
+    cancel_min_shares: str = "200"
+    cancel_size_multiplier: str = "2"
+    resume_min_shares: str = "400"
+    resume_size_multiplier: str = "4"
+    drop_window_seconds: float = Field(default=2, gt=0, le=300, allow_inf_nan=False)
+    drop_percent: str = "50"
+    stable_seconds: float = Field(default=3, gt=0, le=300, allow_inf_nan=False)
+    cooldown_seconds: float = Field(default=10, gt=0, le=300, allow_inf_nan=False)
+
+
 class SetupPayload(BaseModel):
     dry_run: bool = False
     emergency_exit_on_buy_fill: bool = True
@@ -47,6 +61,7 @@ class SetupPayload(BaseModel):
     run_duration_minutes: int = Field(default=0, ge=0, le=59)
     max_position_per_market: str = "10.0"
     max_total_position: str = "50.0"
+    depth_protection: DepthProtectionPayload = Field(default_factory=DepthProtectionPayload)
 
 
 class AccountPayload(BaseModel):
@@ -124,6 +139,11 @@ class DashboardState:
             "max_position_per_market": str(config.risk.max_position_per_market) if config else "10.0",
             "max_total_position": str(config.risk.max_total_position) if config else "50.0",
             "cancel_after_seconds": config.cancel_after_seconds if config else 60,
+            "depth_protection": {
+                name: (str(value) if isinstance(value, Decimal) else value)
+                for name in DepthProtectionConfig.__dataclass_fields__
+                for value in [getattr(config.depth_protection if config else DepthProtectionConfig(), name)]
+            },
             "run_duration_enabled": bool(config and config.run_duration_seconds > 0),
             "run_duration_seconds": config.run_duration_seconds if config else 0,
             "run_expires_at": self.engine.run_expires_at if self.engine else None,
@@ -448,6 +468,7 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
             run_duration_seconds=run_duration_seconds,
             max_position_per_market=payload.max_position_per_market.strip(),
             max_total_position=payload.max_total_position.strip(),
+            depth_protection=depth_protection_config(payload.depth_protection.model_dump()),
         )
         state.config_path.write_text(build_config_text(answers, markets=market_answers), encoding="utf-8")
         return {"ok": True, "message": "市场与风控配置已保存。"}
@@ -579,6 +600,10 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
 
 
 def _validate_setup(payload: SetupPayload) -> None:
+    try:
+        depth_protection_config(payload.depth_protection.model_dump())
+    except (ValueError, InvalidOperation) as error:
+        raise HTTPException(status_code=422, detail=f"深度保护设置无效：{error}") from error
     for index, market in enumerate(payload.markets, start=1):
         if not market.market_id.strip():
             raise HTTPException(

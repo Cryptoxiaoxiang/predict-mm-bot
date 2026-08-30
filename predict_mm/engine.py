@@ -20,6 +20,7 @@ from predict_mm.client import (
     PredictSubmissionAborted,
 )
 from predict_mm.config import BotConfig, MarketConfig
+from predict_mm.depth_guard import DepthGuard, selection
 from predict_mm.models import (
     ExitContext,
     ManagedOrder,
@@ -52,6 +53,8 @@ class MarketMakerEngine:
     ORDER_SUBMIT_CONCURRENCY = 5
     CANCEL_CONCURRENCY = 3
     NO_SAFE_QUOTE_BACKOFF_SECONDS = 15.0
+    DEPTH_WATCH_LIMIT = 64
+    DEPTH_WATCH_SECONDS = 60.0
 
     def __init__(
         self,
@@ -80,6 +83,11 @@ class MarketMakerEngine:
         self._cancel_tasks: dict[str, asyncio.Task[bool]] = {}
         self._guard_cancel_tasks: dict[str, asyncio.Task[bool]] = {}
         self._guard_first_attempts: dict[str, asyncio.Future[bool]] = {}
+        self._depth_guard = DepthGuard(config.depth_protection)
+        self._depth_candidates: dict[tuple[str, str], Quote] = {}
+        self._depth_watch_until: dict[str, float] = {}
+        self._depth_cancelling: dict[str, Quote] = {}
+        self._depth_stream_epoch = 0.0
         self._cancel_not_before = 0.0
         self._orderbook_history: dict[str, deque[OrderBook]] = {}
         self._emergency_tasks: set[asyncio.Task[None]] = set()
@@ -331,10 +339,15 @@ class MarketMakerEngine:
                 self._wallet_events.task_done()
 
     def _active_order_market_ids(self) -> set[str]:
-        return {
+        active = {
             order.quote.market_id
             for order in self._working_orders()
             if not order.is_emergency_exit
+        }
+        now = monotonic()
+        return active | {
+            market_id for market_id, until in self._depth_watch_until.items()
+            if until > now and market_id not in self._halted_markets
         }
 
     async def _watch_active_orderbooks(self) -> None:
@@ -355,6 +368,8 @@ class MarketMakerEngine:
                     "Active-order WebSocket disconnected: %s; using REST fallback until reconnect",
                     error,
                 )
+            self._depth_guard.disconnected()
+            self._depth_stream_epoch = monotonic()
             with suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self._stop.wait(), timeout=1)
 
@@ -400,10 +415,77 @@ class MarketMakerEngine:
         orderbook = self._cache_orderbook(orderbook)
         if orderbook is None:
             return
-        if self.config.replace_on_orderbook_change:
+        if self.config.replace_on_orderbook_change or self.config.depth_protection.enabled:
             await self._cancel_orders_approached_by_market(
                 orderbook.market_id, orderbook, wait=wait_for_cancels,
             )
+        if self.config.depth_protection.enabled:
+            # Only warm candidates belonging to this update, never all markets.
+            owned = [o for o in self.open_orders.values() if o.quote.market_id == orderbook.market_id]
+            active = {selection(o.quote) for o in owned
+                      if o.status in {OrderStatus.PENDING, OrderStatus.OPEN, OrderStatus.UNKNOWN}
+                      and not o.is_emergency_exit}
+            for side in ("YES", "NO"):
+                key = (orderbook.market_id, side)
+                quote = self._depth_candidates.get(key)
+                if quote is not None and key not in active:
+                    self._depth_observation(quote, orderbook, owned)
+
+    def _depth_observation(self, quote: Quote, book: OrderBook,
+                           owned: list[ManagedOrder] | None = None):
+        return self._depth_guard.observe(
+            quote, book, owned if owned is not None else [
+                o for o in self.open_orders.values() if o.quote.market_id == quote.market_id
+            ], now=monotonic(),
+            live=(book.source == "websocket" and self._orderbook_stream_connected()
+                  and book.received_at >= max(
+                      self._depth_stream_epoch,
+                      self._depth_watch_until.get(quote.market_id, 0) - self.DEPTH_WATCH_SECONDS,
+                  )),
+        )
+
+    def _watch_depth_candidate(self, quote: Quote) -> None:
+        self._depth_candidates[selection(quote)] = quote
+        if (quote.market_id not in self._depth_watch_until
+                and len(self._depth_watch_until) < self.DEPTH_WATCH_LIMIT):
+            self._depth_watch_until[quote.market_id] = monotonic() + self.DEPTH_WATCH_SECONDS
+
+    def _depth_allows_submission(self, quote: Quote, book: OrderBook | None) -> bool:
+        if not self.config.depth_protection.enabled or quote.side != Side.BUY:
+            return True
+        self._watch_depth_candidate(quote)
+        if book is None:
+            return False
+        observation = self._depth_observation(quote, book)
+        state = self._depth_guard.states[selection(quote)]
+        reason = None if observation.ready else observation.reason or "recovering"
+        if state.last_reason != reason:
+            logger.info(
+                "Depth guard %s: market=%s outcome=%s quote=%s depth=%s cancel_below=%s "
+                "resume_at=%s reason=%s; new orders use normal batch scheduling",
+                "ready" if observation.ready else "waiting", quote.market_id, quote.outcome,
+                quote.price, observation.depth, observation.cancel_threshold,
+                observation.resume_threshold, reason,
+            )
+            state.last_reason = reason
+        return observation.ready
+
+    def _prune_depth_watches(self) -> None:
+        now = monotonic()
+        expired = set()
+        for mid, until in list(self._depth_watch_until.items()):
+            if until <= now or mid in self._halted_markets:
+                del self._depth_watch_until[mid]
+                expired.add(mid)
+        active = {selection(o.quote) for o in self._working_orders() if not o.is_emergency_exit}
+        for key in list(self._depth_candidates):
+            state = self._depth_guard.states.get(key)
+            if key in active:
+                del self._depth_candidates[key]
+            elif key[0] in expired or state is None or now - state.last_seen > 60:
+                del self._depth_candidates[key]
+                self._depth_guard.states.pop(key, None)
+        self._depth_guard.prune(active | set(self._depth_candidates), now)
 
     async def _manage_active_order_lifetimes_from_cache(self) -> None:
         for market in self.config.enabled_markets:
@@ -427,6 +509,7 @@ class MarketMakerEngine:
             await self._manage_order_lifetimes(market, orderbook, quotes)
 
     async def _tick(self) -> None:
+        self._prune_depth_watches()
         await self._reconcile_order_statuses()
         markets = self._next_market_batch()
         if not markets:
@@ -447,7 +530,7 @@ class MarketMakerEngine:
             if orderbook is None:
                 continue
             orderbook = self._cache_orderbook(orderbook) or self._latest_orderbooks[market.id]
-            if self.config.replace_on_orderbook_change:
+            if self.config.replace_on_orderbook_change or self.config.depth_protection.enabled:
                 await self._cancel_orders_approached_by_market(market.id, orderbook)
             outcome_side = self._outcome_side(market)
             if outcome_side is None:
@@ -485,6 +568,7 @@ class MarketMakerEngine:
                     for order in active
                 )
             ]
+            missing_quotes = [q for q in missing_quotes if self._depth_allows_submission(q, orderbook)]
             approved = self.risk.filter_quotes(missing_quotes, active, positions)
             for quote in approved:
                 quotes_to_submit.append(quote)
@@ -661,6 +745,8 @@ class MarketMakerEngine:
                         quote.market_id, quote.outcome, quote.price,
                     )
                     return
+                if not self._depth_allows_submission(quote, latest):
+                    return
                 try:
                     order = await self.client.create_order(quote)
                 except Exception as error:  # noqa: BLE001
@@ -688,7 +774,8 @@ class MarketMakerEngine:
                 reference = (quote_references or {}).get(self._quote_key(order.quote))
                 self._register_order(order, reference)
                 latest = self._latest_orderbooks.get(quote.market_id)
-                if latest is not None and self.config.replace_on_orderbook_change:
+                if latest is not None and (self.config.replace_on_orderbook_change
+                                           or self.config.depth_protection.enabled):
                     # A price update can precede the POST response/registration.
                     # Recheck now, even if no further WS message arrives.
                     await self._cancel_orders_approached_by_market(
@@ -874,10 +961,11 @@ class MarketMakerEngine:
     async def _cancel_orders_approached_by_market(
         self, market_id: str, orderbook: OrderBook, *, wait: bool = True,
     ) -> None:
-        """Cancel quotes once the market touch is only one tick away from them."""
+        """Run independent price/depth guards through the same deduplicated cancel path."""
         tick_size = orderbook.tick_size or self.config.strategy.tick_size
         pending: list[asyncio.Future[bool]] = []
-        for order in list(self.open_orders.values()):
+        owned = [o for o in self.open_orders.values() if o.quote.market_id == market_id]
+        for order in owned:
             if (
                 order.status not in {OrderStatus.PENDING, OrderStatus.OPEN}
                 or order.is_emergency_exit
@@ -885,20 +973,38 @@ class MarketMakerEngine:
             ):
                 continue
 
-            touch_price = self._approached_touch(order.quote, orderbook)
-            if touch_price is None:
+            touch_price = (self._approached_touch(order.quote, orderbook)
+                           if self.config.replace_on_orderbook_change else None)
+            depth = (self._depth_observation(order.quote, orderbook, owned)
+                     if self.config.depth_protection.enabled and order.quote.side == Side.BUY else None)
+            if depth is not None and depth.reason and order.order_id not in self._depth_cancelling:
+                self._depth_cancelling[order.order_id] = order.quote
+                self._depth_guard.block(order.quote)
+                self._watch_depth_candidate(order.quote)
+            if touch_price is None and not (depth and depth.reason):
                 continue
 
             task = self._guard_cancel_tasks.get(order.order_id)
             if task is None or task.done():
                 triggered_at = monotonic()
-                logger.info(
-                    "Price guard triggered: order=%s market=%s outcome=%s quote=%s touch=%s "
-                    "tick=%s source=%s book_ts_ms=%s received_ts_ms=%s receive_to_trigger_ms=%.1f",
-                    order.order_id, market_id, order.quote.outcome, order.quote.price,
-                    touch_price, tick_size, orderbook.source, orderbook.update_timestamp_ms,
-                    orderbook.received_timestamp_ms, (triggered_at - orderbook.received_at) * 1000,
-                )
+                if touch_price is not None:
+                    logger.info(
+                        "Price guard triggered: order=%s market=%s outcome=%s quote=%s touch=%s "
+                        "tick=%s source=%s book_ts_ms=%s received_ts_ms=%s receive_to_trigger_ms=%.1f",
+                        order.order_id, market_id, order.quote.outcome, order.quote.price,
+                        touch_price, tick_size, orderbook.source, orderbook.update_timestamp_ms,
+                        orderbook.received_timestamp_ms, (triggered_at - orderbook.received_at) * 1000,
+                    )
+                if depth and depth.reason:
+                    logger.info(
+                        "Depth guard triggered: order=%s market=%s outcome=%s quote=%s "
+                        "depth=%s peak=%s cancel_below=%s resume_at=%s reason=%s "
+                        "source=%s receive_to_trigger_ms=%.1f",
+                        order.order_id, market_id, order.quote.outcome, order.quote.price,
+                        depth.depth, depth.peak, depth.cancel_threshold, depth.resume_threshold,
+                        depth.reason, orderbook.source,
+                        (triggered_at - orderbook.received_at) * 1000,
+                    )
                 first_attempt = asyncio.get_running_loop().create_future()
                 self._guard_first_attempts[order.order_id] = first_attempt
                 task = asyncio.create_task(self._run_guard_cancel(order, triggered_at, first_attempt))
@@ -937,6 +1043,7 @@ class MarketMakerEngine:
             if not first_attempt.done():
                 first_attempt.set_result(result)
             if result:
+                self._depth_cancel_finished(order)
                 return True
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=delay)
@@ -944,7 +1051,15 @@ class MarketMakerEngine:
             except asyncio.TimeoutError:
                 pass
             delay = min(delay * 2, 4.0)
+        self._depth_cancel_finished(order)
         return False
+
+    def _depth_cancel_finished(self, order: ManagedOrder) -> None:
+        quote = self._depth_cancelling.pop(order.order_id, None)
+        if quote is not None and not any(
+            selection(other) == selection(quote) for other in self._depth_cancelling.values()
+        ):
+            self._depth_guard.acknowledged(quote, monotonic())
 
     def _approached_touch(self, quote: Quote, book: OrderBook) -> Decimal | None:
         tick = book.tick_size or self.config.strategy.tick_size

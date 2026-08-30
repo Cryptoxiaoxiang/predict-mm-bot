@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Predict.fun 自动挂单机器人</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260828-market-id" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260831-depth-guard" />
   </head>
   <body>
     <div class="app-shell">
@@ -103,6 +103,22 @@
               </div>
               <label class="switch-row"><span><strong>买单被吃单后立即卖出</strong><small>包括 Yes 与 No；成交保护启用后会停止对应市场继续报价</small></span><span class="switch-control"><input type="checkbox" name="emergency_exit_on_buy_fill" checked /><i></i></span><span class="tooltip" tabindex="0">?<span class="tooltip-text" role="tooltip">实盘专用。买单被吃单（包括部分成交）时，机器人会撤掉该市场其他订单，并提交非 post-only 限价卖单。市场 tick 为 0.001 时使用 0.001，否则使用 0.01。这可能会造成损失。</span></span></label>
               <label class="switch-row"><span><strong>模拟运行</strong><small>开启后只计算报价和写入日志，不会创建真实订单</small></span><span class="switch-control"><input type="checkbox" name="dry_run" /><i></i></span></label>
+              <label class="switch-row"><span><strong>买盘深度保护</strong><small>前方买盘过少或快速减少时优先撤单；恢复后仍由普通批次重新挂单</small></span><span class="switch-control"><input type="checkbox" name="depth_enabled" checked /><i></i></span></label>
+              <details class="depth-protection-settings">
+                <summary>深度保护阈值</summary>
+                <p class="details-note">Q 为单次挂单份额，D 为价格严格高于你的买价的外部买单总份额，不含自己的挂单。撤单与恢复阈值均取“最低份额”和“倍数 × Q”的较大值。Yes、No 分别计算；深度保护也适用于最低 tick 挂单。</p>
+                <div class="form-grid three-columns">
+                  <label class="field"><span>撤单最低深度（份）</span><input name="depth_cancel_min_shares" type="number" min="0.01" step="any" value="200" required /></label>
+                  <label class="field"><span>撤单数量倍数</span><input name="depth_cancel_size_multiplier" type="number" min="0.01" step="any" value="2" required /></label>
+                  <label class="field"><span>减量回看窗口（秒）</span><input name="depth_drop_window_seconds" type="number" min="0.01" max="300" step="any" value="2" required /></label>
+                  <label class="field"><span>恢复最低深度（份）</span><input name="depth_resume_min_shares" type="number" min="0.01" step="any" value="400" required /></label>
+                  <label class="field"><span>恢复数量倍数</span><input name="depth_resume_size_multiplier" type="number" min="0.01" step="any" value="4" required /></label>
+                  <label class="field"><span>深度下降百分比（%）</span><input name="depth_drop_percent" type="number" min="0.01" max="100" step="any" value="50" required /></label>
+                  <label class="field"><span>恢复稳定时间（秒）</span><input name="depth_stable_seconds" type="number" min="0.01" max="300" step="any" value="3" required /></label>
+                  <label class="field"><span>撤单后冷却（秒）</span><input name="depth_cooldown_seconds" type="number" min="0.01" max="300" step="any" value="10" required /></label>
+                </div>
+                <p class="details-note">快速减量须同时满足下降比例和剩余深度低于恢复阈值；回看窗口不是轮询间隔。恢复须经过冷却并稳定达标，提交前会再次检查。此策略可能减少挂单，不能保证避免成交。</p>
+              </details>
               <div class="form-actions"><button class="btn primary" type="submit">保存挂单设置</button></div>
             </section>
           </form>
@@ -125,6 +141,6 @@
         </div>
       </article>
     </template>
-    <script src="/static/app.js?v=20260828-market-id"></script>
+  <script src="/static/app.js?v=20260831-depth-guard"></script>
   </body>
 </html>

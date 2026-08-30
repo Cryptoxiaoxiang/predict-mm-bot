@@ -1,5 +1,10 @@
 import asyncio
 
+import pytest
+from fastapi import HTTPException
+
+from predict_mm.config import Settings, load_config
+
 from predict_mm.web import (
     MarketPayload,
     SetupPayload,
@@ -10,7 +15,38 @@ from predict_mm.web import (
     _resolve_markets_for_url,
     _search_query_from_slug,
     _validate_setup,
+    create_app,
 )
+
+
+def test_depth_settings_save_and_status_round_trip_without_account_changes(tmp_path, monkeypatch):
+    monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: cls()))
+    config_path, env_path = tmp_path / "config.toml", tmp_path / ".env"
+    env_path.write_text("UNCHANGED=1\n")
+    app = create_app(config_path, env_path)
+    endpoints = {r.path: r.endpoint for r in app.routes if hasattr(r, "endpoint")}
+    payload = SetupPayload(markets=[MarketPayload(market_id="123")], depth_protection={
+        "enabled": True, "cancel_min_shares": "250", "resume_min_shares": "500",
+        "drop_percent": "55", "stable_seconds": 4,
+    })
+    assert asyncio.run(endpoints["/api/setup"](payload))["ok"]
+    status = asyncio.run(endpoints["/api/status"]())
+    assert status["depth_protection"]["cancel_min_shares"] == "250"
+    assert status["depth_protection"]["stable_seconds"] == 4
+    assert load_config(config_path).depth_protection.enabled
+    assert env_path.read_text() == "UNCHANGED=1\n"
+    # The next save preserves every returned threshold and can disable the feature.
+    values = status["depth_protection"] | {"enabled": False}
+    asyncio.run(endpoints["/api/setup"](SetupPayload(markets=payload.markets, depth_protection=values)))
+    assert not load_config(config_path).depth_protection.enabled
+
+
+@pytest.mark.parametrize("values", [{"drop_percent": "NaN"}, {"resume_size_multiplier": "1"}])
+def test_web_depth_errors_are_readable(values):
+    with pytest.raises(HTTPException) as error:
+        _validate_setup(SetupPayload(markets=[MarketPayload(market_id="1")], depth_protection=values))
+    assert error.value.status_code == 422
+    assert "深度保护设置无效" in error.value.detail
 
 
 def test_market_slug_is_extracted_from_predict_url() -> None:

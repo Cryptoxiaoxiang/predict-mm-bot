@@ -125,6 +125,9 @@ th:first-child, td:first-child { padding-left: 0; }
 .field input, .field select { width: 100%; height: 42px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; outline: none; background: #0b111c; color: var(--text); }
 .field input:focus, .field select:focus { border-color: #3c9b77; box-shadow: 0 0 0 3px rgba(124, 244, 191, .07); }
 .details-note { margin: 18px 0 0; line-height: 1.6; }
+.depth-protection-settings { margin-top: 18px; }
+.depth-protection-settings summary { cursor: pointer; font-weight: 600; padding: 8px 0; }
+.depth-protection-settings .form-grid { margin-top: 18px; }
 .form-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line-soft); }
 .approval-panel { margin-top: 16px !important; }
 .approval-steps { display: grid; gap: 7px; }

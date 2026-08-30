@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from getpass import getpass
 from pathlib import Path
+
+from predict_mm.config import DepthProtectionConfig
 
 
 @dataclass(frozen=True)
@@ -23,6 +25,7 @@ class WizardAnswers:
     run_duration_seconds: int = 0
     max_position_per_market: str = "10.0"
     max_total_position: str = "50.0"
+    depth_protection: DepthProtectionConfig = field(default_factory=DepthProtectionConfig)
 
 
 @dataclass(frozen=True)
@@ -84,6 +87,12 @@ def build_env_text(answers: WizardAnswers) -> str:
 
 
 def build_config_text(answers: WizardAnswers, markets: list[MarketAnswers] | None = None) -> str:
+    depth_lines = []
+    for name in answers.depth_protection.__dataclass_fields__:
+        value = getattr(answers.depth_protection, name)
+        rendered = _toml_bool(value) if isinstance(value, bool) else f'"{value}"'
+        depth_lines.append(f"{name} = {rendered}")
+    depth_text = "\n".join(depth_lines)
     configured_markets = markets or [
         MarketAnswers(
             market_id=answers.market_id,
@@ -114,6 +123,9 @@ cancel_all_on_shutdown = true
 emergency_exit_on_buy_fill = {_toml_bool(answers.emergency_exit_on_buy_fill)}
 
 {markets_text}
+
+[depth_protection]
+{depth_text}
 
 [strategy]
 tick_size = "0.001"

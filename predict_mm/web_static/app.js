@@ -144,6 +144,15 @@ const validationFieldLabels = {
   run_duration_minutes: '有效期分钟',
   max_position_per_market: '单市场最大仓位',
   max_total_position: '总最大仓位',
+  depth_protection: '买盘深度保护',
+  cancel_min_shares: '撤单最低深度',
+  cancel_size_multiplier: '撤单数量倍数',
+  resume_min_shares: '恢复最低深度',
+  resume_size_multiplier: '恢复数量倍数',
+  drop_window_seconds: '减量回看窗口',
+  drop_percent: '深度下降百分比',
+  stable_seconds: '恢复稳定时间',
+  cooldown_seconds: '撤单后冷却时间',
 };
 
 function validationPath(location = []) {
@@ -610,6 +619,11 @@ async function refreshStatus() {
     if (!formDirty && !isEditing) {
       if (markets.length) renderMarkets(markets);
       setField('cancel_after_seconds', status.cancel_after_seconds);
+      const depth = status.depth_protection || {};
+      for (const [key, value] of Object.entries(depth)) {
+        if (key === 'enabled') form.elements.namedItem('depth_enabled').checked = value;
+        else setField(`depth_${key}`, value);
+      }
       setField('max_position_per_market', status.max_position_per_market);
       setField('max_total_position', status.max_total_position);
       const durationSeconds = Number(status.run_duration_seconds) || 0;
@@ -738,6 +752,13 @@ runDurationEnabled.addEventListener('change', () => updateDurationFields({applyD
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   const values = Object.fromEntries(new FormData(form));
+  values.depth_protection = {enabled: form.elements.namedItem('depth_enabled').checked};
+  for (const [key, value] of Object.entries(values)) {
+    if (key.startsWith('depth_') && key !== 'depth_protection') {
+      if (key !== 'depth_enabled') values.depth_protection[key.slice(6)] = value;
+      delete values[key];
+    }
+  }
   values.markets = collectMarkets();
   values.dry_run = form.elements.namedItem('dry_run').checked;
   values.emergency_exit_on_buy_fill = form.elements.namedItem('emergency_exit_on_buy_fill').checked;

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import tomllib
 from dataclasses import dataclass, field
@@ -55,6 +56,35 @@ class RiskConfig:
 
 
 @dataclass(frozen=True)
+class DepthProtectionConfig:
+    enabled: bool = True
+    cancel_min_shares: Decimal = Decimal("200")
+    cancel_size_multiplier: Decimal = Decimal("2")
+    resume_min_shares: Decimal = Decimal("400")
+    resume_size_multiplier: Decimal = Decimal("4")
+    drop_window_seconds: float = 2.0
+    drop_percent: Decimal = Decimal("50")
+    stable_seconds: float = 3.0
+    cooldown_seconds: float = 10.0
+
+    def __post_init__(self) -> None:
+        for name in ("cancel_min_shares", "cancel_size_multiplier", "resume_min_shares",
+                     "resume_size_multiplier", "drop_percent"):
+            value = getattr(self, name)
+            if not value.is_finite() or value <= 0:
+                raise ValueError("深度保护阈值必须是有限的正数")
+        if (self.resume_min_shares <= self.cancel_min_shares
+                or self.resume_size_multiplier <= self.cancel_size_multiplier):
+            raise ValueError("恢复深度的最低份额和数量倍数必须高于撤单阈值")
+        if self.drop_percent > 100:
+            raise ValueError("深度下降百分比不能超过 100")
+        for name in ("drop_window_seconds", "stable_seconds", "cooldown_seconds"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or not 0 < value <= 300:
+                raise ValueError("深度保护时间必须大于 0 且不超过 300 秒")
+
+
+@dataclass(frozen=True)
 class MarketConfig:
     id: str
     enabled: bool = True
@@ -80,6 +110,7 @@ class BotConfig:
     emergency_exit_on_buy_fill: bool = True
     strategy: StrategyConfig = field(default_factory=StrategyConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
+    depth_protection: DepthProtectionConfig = field(default_factory=DepthProtectionConfig)
     markets: list[MarketConfig] = field(default_factory=list)
 
     @property
@@ -103,6 +134,7 @@ def load_config(path: str | Path) -> BotConfig:
         emergency_exit_on_buy_fill=bool(raw.get("emergency_exit_on_buy_fill", True)),
         strategy=_strategy(raw.get("strategy", {})),
         risk=_risk(raw.get("risk", {})),
+        depth_protection=depth_protection_config(raw.get("depth_protection", {})),
         markets=markets,
     )
     if not config.enabled_markets:
@@ -145,6 +177,23 @@ def update_dotenv_value(path: str | Path, key: str, value: str) -> None:
 
 def _decimal(value: object, default: str) -> Decimal:
     return Decimal(str(value if value is not None else default))
+
+
+def depth_protection_config(raw: dict) -> DepthProtectionConfig:
+    defaults = DepthProtectionConfig()
+    values = {}
+    for name in defaults.__dataclass_fields__:
+        default = getattr(defaults, name)
+        value = raw.get(name, default)
+        if isinstance(default, Decimal):
+            values[name] = Decimal(str(value))
+        elif isinstance(default, bool):
+            if not isinstance(value, bool):
+                raise ValueError("深度保护开关必须是布尔值")
+            values[name] = value
+        else:
+            values[name] = float(value)
+    return DepthProtectionConfig(**values)
 
 
 def _strategy(raw: dict) -> StrategyConfig:

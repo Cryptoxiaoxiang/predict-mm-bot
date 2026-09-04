@@ -101,9 +101,10 @@ sudo systemctl restart predict-mm-bot
 
 ## 账户配置
 
-- 申请API key, 加入官方Discord 群 https://discord.gg/predictdotfun ，在Predict fun网页版点右上角头像，复制用户名下的钱包地址， 在Sport Ticket频道中提交工单，用刚刚的钱包地址申请Api Key
+- 申请API key, 打开开发者网站申请 https://developers.predict.fun/ ， 教程参考 https://x.com/cryptoxiaoxiang/status/2095794263439397155
+- 在Predict fun网页版点右上角头像，复制用户名下的钱包地址
 - 导出Pravy 的私钥，在PredictFun官网点头像->设置->导出Pravy私钥
-- 将上面的钱包地址，Api key，以及Pravy私钥填入机器人控制台的账户设置中就完成了
+- 将上面复制的钱包地址，Api key，以及Pravy私钥填入机器人控制台的账户设置中就完成了
 - 如果是新钱包，需要在网页上完成一笔任意交易，会自动完成授权
 
 

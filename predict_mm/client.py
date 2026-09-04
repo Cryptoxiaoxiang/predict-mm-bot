@@ -292,6 +292,13 @@ class PredictClient:
         """Read the rendered public category page when API search is unavailable."""
         return await asyncio.to_thread(self._markets_from_public_page_sync, market_url, slug)
 
+    async def set_referral(self, referral_code: str) -> None:
+        """Set an unassigned referral; the API preserves existing relationships."""
+        self._require_jwt()
+        await self._request(
+            "POST", "/v1/account/referral", {"data": {"referralCode": referral_code}}
+        )
+
     async def create_eoa_jwt(self, private_key: str) -> str:
         """Create a wallet JWT by signing Predict's current auth message locally."""
         self._require_api_key()

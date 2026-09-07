@@ -21,11 +21,16 @@
 
 你需要：
 
-- Predictfun 注册链接，可以获得10%手续费折扣: https://predict.fun?ref=5BA3F ，为了安全最好使用一个新钱包注册使用。
-- 一台已安装 Python 3.11 或更高版本的电脑；
-- 只有准备真实交易时，才需要 Predict.fun API Key 和钱包私钥；网页会自动生成 JWT Token。
+- 为了安全最好注册一个新钱包使用, Predictfun 注册链接，可以获得30%手续费折扣: https://predict.fun?ref=5BA3F 
+- 需要 Predict.fun API Key 和钱包私钥；网页会自动生成 JWT Token。
 
-模拟运行不需要填写钱包私钥，也不会发送真实订单。
+## 账户配置
+
+- 申请API key, 打开开发者网站申请 https://developers.predict.fun/ ， 教程参考 https://x.com/cryptoxiaoxiang/status/2095794263439397155
+- 在Predict fun网页版点右上角头像，复制用户名下的钱包地址
+- 导出Pravy 的私钥，在PredictFun官网点头像->设置->导出Pravy私钥
+- 将上面复制的钱包地址，Api key，以及Pravy私钥填入机器人控制台的账户设置中就完成了
+- 如果是新钱包，需要在网页上完成一笔任意交易，会自动完成授权
 
 ## 一条命令安装到服务器（推荐）
 
@@ -81,14 +86,6 @@ sudo systemctl restart predict-mm-bot
 ```
 
 重启或更新前，应先在网页点击“停止并撤单”。系统服务重启后只会恢复网页控制台，机器人不会自动开始实盘挂单。
-
-## 账户配置
-
-- 申请API key, 打开开发者网站申请 https://developers.predict.fun/ ， 教程参考 https://x.com/cryptoxiaoxiang/status/2095794263439397155
-- 在Predict fun网页版点右上角头像，复制用户名下的钱包地址
-- 导出Pravy 的私钥，在PredictFun官网点头像->设置->导出Pravy私钥
-- 将上面复制的钱包地址，Api key，以及Pravy私钥填入机器人控制台的账户设置中就完成了
-- 如果是新钱包，需要在网页上完成一笔任意交易，会自动完成授权
 
 
 ## 命令行方式

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Predict.fun 自动挂单机器人</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260831-depth-guard" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260908-system-font" />
   </head>
   <body>
     <div class="app-shell">
@@ -86,7 +86,7 @@
         <section id="quotes" class="view">
           <header class="topbar"><div><p class="eyebrow">QUOTE SETTINGS</p><h1>挂单设置</h1><p class="subtitle">管理做市市场、挂单数量和刷新策略</p></div><button id="add-market-button" class="btn primary" type="button">＋ 添加市场</button></header>
           <form id="setup-form">
-            <section class="card form-card"><div class="section-title"><div><h2>做市市场</h2><p>选择 Yes 或 No 只挂对应选项；选择 Yes &amp; No 才会双向挂单</p></div><span id="configured-market-summary" class="summary">尚未配置市场</span></div><div id="markets-list" class="market-list"></div></section>
+            <section class="card form-card"><div class="section-title"><div><h2>做市市场</h2><p>选择 Yes 或 No 只挂对应选项；选择 Yes &amp; No 才会双向挂单</p></div><span id="configured-market-summary" class="summary">尚未配置市场</span></div><div id="markets-list" class="market-list"></div><div class="form-actions"><button id="add-market-bottom-button" class="btn primary" type="button">＋ 添加市场</button></div></section>
             <section class="card form-card"><div class="section-title"><div><h2>仓位与刷新</h2><p>所有市场共用的风险限制</p></div></div>
               <div class="form-grid three-columns">
                 <label class="field"><span>单市场最大仓位</span><input name="max_position_per_market" inputmode="decimal" value="10.0" required /></label>
@@ -141,6 +141,6 @@
         </div>
       </article>
     </template>
-  <script src="/static/app.js?v=20260831-depth-guard"></script>
+  <script src="/static/app.js?v=20260907-add-market-bottom"></script>
   </body>
 </html>

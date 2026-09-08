@@ -90,5 +90,5 @@ def test_selected_market_summary_shows_market_id_on_its_own_line() -> None:
     assert "identifier.textContent = `Market ID：${marketId}`" in javascript
     assert "summary.replaceChildren(selection, identifier)" in javascript
     assert ".selected-market-id { display: block;" in stylesheet
-    assert '/static/app.js?v=20260831-depth-guard' in html
-    assert '/static/styles.css?v=20260831-depth-guard' in html
+    assert '/static/app.js?v=' in html
+    assert '/static/styles.css?v=' in html

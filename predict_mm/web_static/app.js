@@ -736,9 +736,11 @@ document.addEventListener('pointerdown', (event) => {
 });
 document.addEventListener('selectionchange', updateLogRefreshPauseState);
 
-document.querySelector('#add-market-button').addEventListener('click', () => {
-  addMarket();
-  formDirty = true;
+document.querySelectorAll('#add-market-button, #add-market-bottom-button').forEach((button) => {
+  button.addEventListener('click', () => {
+    addMarket();
+    formDirty = true;
+  });
 });
 form.addEventListener('input', () => { formDirty = true; });
 form.addEventListener('change', () => { formDirty = true; });

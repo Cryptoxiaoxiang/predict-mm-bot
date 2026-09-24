@@ -27,6 +27,20 @@ jobs:
           --add-data "predict_mm/web_static;predict_mm/web_static"
           --collect-submodules uvicorn --collect-submodules predict_sdk
           desktop_entry.py
+      - name: Smoke-test packaged executable
+        shell: pwsh
+        run: |
+          $env:PREDICT_MM_SMOKE_LOG = Join-Path $env:RUNNER_TEMP 'predict-mm-smoke-error.txt'
+          $exe = (Resolve-Path 'dist/PredictMMBot/PredictMMBot.exe').Path
+          $process = Start-Process -FilePath $exe -ArgumentList '--smoke-test' -PassThru
+          if (-not $process.WaitForExit(60000)) {
+            Stop-Process -Id $process.Id -Force
+            throw 'Packaged application did not complete the startup check within 60 seconds.'
+          }
+          if ($process.ExitCode -ne 0) {
+            if (Test-Path $env:PREDICT_MM_SMOKE_LOG) { Get-Content $env:PREDICT_MM_SMOKE_LOG }
+            throw "Packaged application failed startup check with exit code $($process.ExitCode)."
+          }
       - name: Upload Windows app
         uses: actions/upload-artifact@v4
         with:

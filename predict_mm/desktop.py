@@ -8,8 +8,11 @@ import logging
 import os
 import socket
 import sys
+import tempfile
 import threading
 import time
+import traceback
+import urllib.request
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import contextmanager
 from pathlib import Path
@@ -143,6 +146,24 @@ def show_error(message: str) -> None:
         print(message, file=sys.stderr)
 
 
+def smoke_test() -> None:
+    """Check that the frozen exe contains and serves the dashboard without trading."""
+    previous_directory = Path.cwd()
+    with tempfile.TemporaryDirectory(prefix="predict-mm-desktop-") as directory:
+        try:
+            os.chdir(directory)
+            desktop = DesktopServer()
+            desktop.start()
+            try:
+                with urllib.request.urlopen(desktop.url, timeout=10) as response:
+                    if b"Predict.fun" not in response.read():
+                        raise RuntimeError("打包的网页文件不可用。")
+            finally:
+                desktop.stop()
+        finally:
+            os.chdir(previous_directory)
+
+
 def main() -> None:
     if sys.platform != "win32":
         raise SystemExit("桌面版入口目前仅支持 Windows。")
@@ -152,8 +173,13 @@ def main() -> None:
     if sys.stderr is None:
         sys.stderr = open(os.devnull, "w", encoding="utf-8")
 
+    is_smoke_test = "--smoke-test" in sys.argv
     try:
         import webview
+
+        if is_smoke_test:
+            smoke_test()
+            return
 
         with single_instance():
             data_dir = user_data_directory()
@@ -181,5 +207,10 @@ def main() -> None:
                 if desktop.thread.is_alive() and not desktop.server.should_exit:
                     desktop.stop()
     except Exception as error:  # noqa: BLE001
+        if is_smoke_test:
+            log_path = os.environ.get("PREDICT_MM_SMOKE_LOG")
+            if log_path:
+                Path(log_path).write_text(traceback.format_exc(), encoding="utf-8")
+            raise SystemExit(1) from error
         show_error(f"应用程序无法启动：{error}")
         raise SystemExit(1) from error

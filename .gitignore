@@ -15,3 +15,4 @@ logs/
 build/
 dist/
 .venv-windows/
+PredictMMBot.spec

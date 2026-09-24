@@ -11,7 +11,7 @@ if errorlevel 1 goto :failed
 ".venv-windows\Scripts\python.exe" -m pip install ".[desktop,windows-build]"
 if errorlevel 1 goto :failed
 
-".venv-windows\Scripts\python.exe" -m PyInstaller --noconfirm --clean --onedir --windowed --name PredictMMBot --paths . --specpath build --add-data "predict_mm\web_static;predict_mm\web_static" --collect-submodules uvicorn --collect-submodules predict_sdk desktop_entry.py
+".venv-windows\Scripts\python.exe" -m PyInstaller --noconfirm --clean --onedir --windowed --name PredictMMBot --paths . --add-data "predict_mm\web_static;predict_mm\web_static" --collect-submodules uvicorn --collect-submodules predict_sdk desktop_entry.py
 if errorlevel 1 goto :failed
 
 echo.

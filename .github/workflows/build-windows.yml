@@ -23,7 +23,7 @@ jobs:
       - name: Build desktop app
         run: >-
           python -m PyInstaller --noconfirm --clean --onedir --windowed
-          --name PredictMMBot --paths . --specpath build
+          --name PredictMMBot --paths .
           --add-data "predict_mm/web_static;predict_mm/web_static"
           --collect-submodules uvicorn --collect-submodules predict_sdk
           desktop_entry.py

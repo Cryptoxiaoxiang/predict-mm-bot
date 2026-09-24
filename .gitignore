@@ -12,3 +12,6 @@ logs/
 *.key
 *.sqlite
 *.db
+build/
+dist/
+.venv-windows/

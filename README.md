@@ -32,6 +32,16 @@
 - 将上面复制的钱包地址，Api key，以及Pravy私钥填入机器人控制台的账户设置中就完成了
 - 如果是新钱包，需要在网页上完成一笔任意交易，会自动完成授权
 
+## Windows 桌面版
+
+桌面版沿用同一套账户设置、挂单设置和总览界面。双击打开后只启动控制台；需要挂单时仍须在界面点击“启动机器人”。关闭窗口时，应用会先请求停止机器人并等待撤单流程结束；如果无法确认完成，会保持窗口打开并提示原因。
+
+如果已经拿到打包好的版本，请解压整个 `PredictMMBot` 文件夹，双击其中的 `PredictMMBot.exe`。运行时不需要安装 Python。电脑需要 Microsoft Edge WebView2 Runtime；Windows 11 通常自带，若提示缺少可从 [微软官网](https://developer.microsoft.com/microsoft-edge/webview2/)安装。首次打开时在“账户设置”填写 API Key、钱包地址和私钥，再保存市场设置。
+
+账户配置、日志和订单记录保存在 `%LOCALAPPDATA%\PredictMMBot`，不随应用升级而覆盖。不要将这个目录或里面的 `.env` 文件发送给别人。Windows 睡眠、关机或强制结束应用会中断本地机器人；长期无人值守运行仍建议使用 VPS。
+
+要在 Windows 电脑上自行生成应用：安装 Python 3.12 后，在仓库目录双击 `build_windows.bat`，构建结果位于 `dist\PredictMMBot\PredictMMBot.exe`。分发时需保留整个 `dist\PredictMMBot` 文件夹；不要只复制 exe。也可以在 GitHub 的 Actions 页面手动运行 **Build Windows desktop app**，下载生成的 Windows 压缩包。Windows 版本需要在 Windows 上构建，不能直接在 Mac 上生成可运行的 exe。
+
 ## 一条命令安装到服务器（推荐）
 
 建议使用 Ubuntu 24.04 云服务器。通过 SSH 登录服务器后，复制并执行下面这一条命令：

@@ -1,0 +1,35 @@
+name: Build Windows desktop app
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/windows-desktop
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install application and packaging dependencies
+        run: python -m pip install ".[desktop,windows-build,dev]"
+      - name: Check desktop and dashboard behavior
+        run: python -m pytest -q tests/test_desktop.py tests/test_web.py
+      - name: Build desktop app
+        run: >-
+          python -m PyInstaller --noconfirm --clean --onedir --windowed
+          --name PredictMMBot --paths . --specpath build
+          --add-data "predict_mm/web_static;predict_mm/web_static"
+          --collect-submodules uvicorn --collect-submodules predict_sdk
+          desktop_entry.py
+      - name: Upload Windows app
+        uses: actions/upload-artifact@v4
+        with:
+          name: PredictMMBot-Windows
+          path: dist/PredictMMBot/
+          if-no-files-found: error

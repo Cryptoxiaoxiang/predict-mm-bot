@@ -410,6 +410,7 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
         await state.stop()
 
     app = FastAPI(title="Predict.fun 自动挂单机器人", lifespan=lifespan)
+    app.state.dashboard = state
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.get("/")

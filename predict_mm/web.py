@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import re
@@ -88,6 +89,10 @@ class AccountPayload(BaseModel):
 
 class MarketUrlPayload(BaseModel):
     market_url: str = Field(min_length=1, max_length=1000)
+
+
+class UiPreferencesPayload(BaseModel):
+    language: Literal["zh", "en"]
 
 
 class MemoryLogHandler(logging.Handler):
@@ -419,6 +424,26 @@ def create_app(config_path: str | Path = "config.toml", env_path: str | Path = "
     @app.get("/api/status")
     async def status() -> dict[str, object]:
         return state.overview()
+
+    @app.get("/api/preferences")
+    async def preferences() -> dict[str, object]:
+        path = state.config_path.with_name(".predict-mm-ui.json")
+        try:
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            language = saved.get("language") if isinstance(saved, dict) else None
+        except (OSError, ValueError):
+            language = None
+        return {"language": language if language in {"zh", "en"} else None}
+
+    @app.post("/api/preferences")
+    async def save_preferences(payload: UiPreferencesPayload) -> dict[str, object]:
+        try:
+            state.config_path.with_name(".predict-mm-ui.json").write_text(
+                json.dumps({"language": payload.language}) + "\n", encoding="utf-8",
+            )
+        except OSError as error:
+            raise HTTPException(status_code=500, detail="语言偏好未能保存，请稍后重试。") from error
+        return {"ok": True, "language": payload.language}
 
     @app.get("/api/balance")
     async def balance() -> dict[str, object]:

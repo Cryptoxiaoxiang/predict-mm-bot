@@ -8,6 +8,7 @@ from predict_mm.config import Settings, load_config
 from predict_mm.web import (
     MarketPayload,
     SetupPayload,
+    UiPreferencesPayload,
     _market_lookup_result,
     _market_locale_from_url,
     _market_slug_from_url,
@@ -17,6 +18,29 @@ from predict_mm.web import (
     _validate_setup,
     create_app,
 )
+
+
+def test_language_preference_survives_restart_without_touching_trading_settings(tmp_path):
+    config, env = tmp_path / "config.toml", tmp_path / ".env"
+    config.write_text("# existing market settings\n")
+    env.write_text("# existing account settings\n")
+    app = create_app(config, env)
+    read = next(r.endpoint for r in app.routes if r.path == "/api/preferences" and "GET" in r.methods)
+    assert asyncio.run(read()) == {"language": None}
+    save = next(r.endpoint for r in app.routes if r.path == "/api/preferences" and "POST" in r.methods)
+    assert asyncio.run(save(UiPreferencesPayload(language="en")))["ok"]
+    restarted = create_app(config, env)
+    read = next(r.endpoint for r in restarted.routes if r.path == "/api/preferences" and "GET" in r.methods)
+    assert asyncio.run(read()) == {"language": "en"}
+    assert config.read_text() == "# existing market settings\n"
+    assert env.read_text() == "# existing account settings\n"
+    (tmp_path / ".predict-mm-ui.json").write_text("invalid json")
+    assert asyncio.run(read()) == {"language": None}
+
+
+def test_language_preference_rejects_unsupported_locale():
+    with pytest.raises(ValueError):
+        UiPreferencesPayload(language="unexpected")
 
 
 def test_depth_settings_save_and_status_round_trip_without_account_changes(tmp_path, monkeypatch):

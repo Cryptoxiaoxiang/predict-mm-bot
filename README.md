@@ -4,7 +4,7 @@
 
 Predict.fun 自动做市工具，提供网页控制台、多市场挂单、自动撤单重报价和成交监测。支持 Windows 桌面版，以及 Ubuntu/Debian VPS 部署。
 
-**[下载 Windows 桌面版](https://github.com/Cryptoxiaoxiang/predict-mm-bot/releases/download/v0.1.0-windows-preview.1/PredictMMBot-Windows-x64.zip)** · [Windows 使用方法](#windows-桌面版) · [VPS 一键安装](#一条命令安装到服务器推荐)
+**[下载 Windows 桌面版](https://github.com/Cryptoxiaoxiang/predict-mm-bot/releases/download/v0.1.0-windows-preview.2/PredictMMBot-Windows-x64.zip)** · [Windows 使用方法](#windows-桌面版) · [VPS 一键安装](#一条命令安装到服务器推荐)
 
 > 本工具不能保证订单永远不会成交。任何放在订单簿上的订单都有成交风险。第一次使用请尝试模拟运行，并从很小的金额开始。
 
@@ -13,6 +13,7 @@ Predict.fun 自动做市工具，提供网页控制台、多市场挂单、自�
 ## 功能简介
 
 - 网页控制台：在浏览器中配置账户、管理市场、启停机器人并查看运行状态。
+- 中英文界面：在右上角切换简体中文或 English，程序会记住语言选择。
 - 市场网址识别：粘贴市场网址，即可识别市场并选择挂单选项。
 - 多市场运行：同时管理多个市场，分别设置挂单选项和数量。
 - 自动挂单与撤单：根据盘口自动报价，按设置的存活时间管理和更新订单。
@@ -44,7 +45,7 @@ Predict.fun 自动做市工具，提供网页控制台、多市场挂单、自�
 2. 解压整个压缩包，保留 `PredictMMBot.exe` 和 `_internal` 文件夹，双击 `PredictMMBot.exe`。
 3. 在“账户设置”填写 API Key、钱包地址和私钥；保存账户和挂单设置后，点击“启动机器人”。
 
-支持 Windows 10/11 64 位，不需要安装 Python。需要 Microsoft Edge WebView2 Runtime，缺少时可从[微软官网](https://developer.microsoft.com/microsoft-edge/webview2/)安装。首个 Windows 版本为预览版，沿用现有中文控制台；英文 README 是使用说明的语言切换，不会改变应用界面语言。
+支持 Windows 10/11 64 位，不需要安装 Python。需要 Microsoft Edge WebView2 Runtime，缺少时可从[微软官网](https://developer.microsoft.com/microsoft-edge/webview2/)安装。Windows 版本为预览版；在程序右上角可切换简体中文或 English，重新打开时会恢复所选语言。市场名称保留原网址识别出的语言，运行日志保留原始内容。
 
 双击应用只会打开控制台，不会自动开始挂单。正常关闭窗口时，应用会先请求停止机器人并等待撤单流程结束；无法确认完成时会保持窗口打开并提示原因。电脑睡眠、关机或强制结束应用会中断本地机器人。
 

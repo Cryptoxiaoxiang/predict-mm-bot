@@ -1,4 +1,6 @@
 const form = document.querySelector('#setup-form');
+const uiText = PredictI18n.setText;
+const translate = PredictI18n.translate;
 const accountForm = document.querySelector('#account-form');
 const notice = document.querySelector('#notice');
 const marketsList = document.querySelector('#markets-list');
@@ -28,13 +30,13 @@ function populateDurationOptions() {
   runDurationHours.replaceChildren(...Array.from({length: 73}, (_, hour) => {
     const option = document.createElement('option');
     option.value = String(hour);
-    option.textContent = `${hour} 小时`;
+    uiText(option, `${hour} 小时`);
     return option;
   }));
   runDurationMinutes.replaceChildren(...Array.from({length: 60}, (_, minute) => {
     const option = document.createElement('option');
     option.value = String(minute);
-    option.textContent = `${minute} 分钟`;
+    uiText(option, `${minute} 分钟`);
     return option;
   }));
 }
@@ -62,23 +64,23 @@ function updateDurationCountdown() {
   const value = document.querySelector('#expiry-value');
   const note = document.querySelector('#expiry-note');
   if (!configuredRunDurationSeconds) {
-    value.textContent = '不限时';
+    uiText(value, '不限时');
     value.className = 'metric-value';
-    note.textContent = '未设置自动停止';
+    uiText(note, '未设置自动停止');
     return;
   }
   if (!botRunning || !runExpiresAtMs) {
-    value.textContent = '未启动';
+    uiText(value, '未启动');
     value.className = 'metric-value warning';
-    note.textContent = `启动后倒计时 ${formatRemainingDuration(configuredRunDurationSeconds)}`;
+    uiText(note, `启动后倒计时 ${formatRemainingDuration(configuredRunDurationSeconds)}`);
     return;
   }
   const remainingSeconds = Math.max(0, (runExpiresAtMs - Date.now()) / 1000);
-  value.textContent = remainingSeconds > 0
+  uiText(value, remainingSeconds > 0
     ? formatRemainingDuration(remainingSeconds)
-    : '正在停止…';
+    : '正在停止…');
   value.className = `metric-value ${remainingSeconds > 60 ? 'positive' : 'warning'}`;
-  note.textContent = '到期后自动撤单并停止';
+  uiText(note, '到期后自动撤单并停止');
 }
 
 function switchView(name) {
@@ -102,7 +104,7 @@ document.querySelectorAll('[data-view-target]').forEach((button) => {
 function showNotice(message, kind = 'success') {
   notice.hidden = false;
   notice.className = `notice ${kind}`;
-  notice.textContent = message;
+  uiText(notice, message);
 }
 
 function isPredictMarketUrl(value) {
@@ -241,7 +243,8 @@ function setOutcomeOptions(row, outcomes, selected = '', selectedIndexSet = null
   select.replaceChildren(...uniqueEntries.map((entry) => {
     const option = document.createElement('option');
     option.value = entry.name;
-    option.textContent = selectedOutcomeLabel(entry.name);
+    if (entry.name === 'YES_NO') uiText(option, selectedOutcomeLabel(entry.name));
+    else option.textContent = entry.name;
     if (entry.indexSet) option.dataset.indexSet = String(entry.indexSet);
     return option;
   }));
@@ -252,7 +255,7 @@ function setOutcomeOptions(row, outcomes, selected = '', selectedIndexSet = null
 
 function renumberMarkets() {
   [...marketsList.querySelectorAll('.market-row')].forEach((row, index) => {
-    row.querySelector('.market-title').textContent = `市场 ${index + 1}`;
+    uiText(row.querySelector('.market-title'), `市场 ${index + 1}`);
     row.querySelector('.remove-market').hidden = index === 0 && marketsList.children.length === 1;
   });
 }
@@ -273,10 +276,10 @@ function updateSelectedMarket(row) {
   const outcome = row.querySelector('[data-field="outcome"]').value;
   const marketId = row.querySelector('[data-field="market_id"]').value.trim();
   const selection = document.createElement('span');
-  selection.textContent = `已选择：${title} · ${selectedOutcomeLabel(outcome)}`;
+  uiText(selection, `已选择：${title} · ${selectedOutcomeLabel(outcome)}`);
   const identifier = document.createElement('span');
   identifier.className = 'selected-market-id';
-  identifier.textContent = `Market ID：${marketId}`;
+  uiText(identifier, `Market ID：${marketId}`);
   summary.replaceChildren(selection, identifier);
   summary.hidden = false;
 }
@@ -301,6 +304,7 @@ function applyResolvedMarket(row, market, selectedOutcome, selectedIndexSet = nu
 
 function addMarket(market = {}) {
   const row = marketTemplate.content.firstElementChild.cloneNode(true);
+  PredictI18n.translateStatic(row);
   const marketIdInput = row.querySelector('[data-field="market_id"]');
   const marketReferenceInput = row.querySelector('[data-field="market_reference"]');
   marketIdInput.value = market.market_id || '';
@@ -341,7 +345,7 @@ function renderMarketLookup(row, result) {
   container.replaceChildren();
   container.hidden = false;
   const message = document.createElement('p');
-  message.textContent = result.message;
+  uiText(message, result.message);
   container.append(message);
   (result.matches || []).forEach((market) => {
     const group = document.createElement('div');
@@ -349,7 +353,7 @@ function renderMarketLookup(row, result) {
     const title = document.createElement('p');
     const category = market.category_title ? `${market.category_title} · ` : '';
     title.textContent = `${category}${market.question}${market.trading_status ? ` · ${market.trading_status}` : ''}`;
-    title.title = `Market ID：${market.id}`;
+    title.title = `Market ID: ${market.id}`;
     group.append(title);
     const outcomes = market.outcomes?.length ? market.outcomes : ['YES', 'NO'];
     outcomes.forEach((outcome) => {
@@ -358,7 +362,7 @@ function renderMarketLookup(row, result) {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'market-match';
-      button.textContent = `选择「${selectedOutcomeLabel(outcomeName)}」挂单`;
+      uiText(button, `选择「${selectedOutcomeLabel(outcomeName)}」挂单`);
       button.addEventListener('click', () => {
         applyResolvedMarket(row, market, outcomeName, outcomeIndexSet);
         container.hidden = true;
@@ -379,7 +383,7 @@ function renderMarketLookup(row, result) {
       const bothButton = document.createElement('button');
       bothButton.type = 'button';
       bothButton.className = 'market-match';
-      bothButton.textContent = '选择「Yes & No」双向挂单';
+      uiText(bothButton, '选择「Yes & No」双向挂单');
       bothButton.addEventListener('click', () => {
         applyResolvedMarket(row, market, 'YES_NO');
         container.hidden = true;
@@ -401,7 +405,7 @@ async function resolveMarketUrl(row) {
   }
   const button = row.querySelector('.resolve-market');
   button.disabled = true;
-  button.textContent = '识别中…';
+  uiText(button, '识别中…');
   try {
     const result = await request('/api/resolve-market', {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({market_url: value}),
@@ -417,7 +421,7 @@ async function resolveMarketUrl(row) {
     showNotice(error.message, 'error');
   } finally {
     button.disabled = false;
-    button.textContent = '识别网址';
+    uiText(button, '识别网址');
   }
 }
 
@@ -455,17 +459,17 @@ function renderOpenOrders(orders = []) {
   const summary = document.querySelector('#open-orders-summary');
   list.replaceChildren();
   const marketCount = new Set(orders.map((order) => order.market_id)).size;
-  summary.textContent = orders.length ? `每 2 秒刷新 · ${orders.length} 笔` : '暂无挂单';
+  uiText(summary, orders.length ? `每 2 秒刷新 · ${orders.length} 笔` : '暂无挂单');
   document.querySelector('#open-order-value').textContent = orders.length;
-  document.querySelector('#open-order-note').textContent = orders.length
+  uiText(document.querySelector('#open-order-note'), orders.length
     ? `分布在 ${marketCount} 个市场`
-    : '暂无机器人管理的挂单';
+    : '暂无机器人管理的挂单');
   if (!orders.length) {
     const row = document.createElement('tr');
     row.className = 'empty-row';
     const cell = document.createElement('td');
     cell.colSpan = 5;
-    cell.textContent = '机器人当前没有管理中的挂单。';
+    uiText(cell, '机器人当前没有管理中的挂单。');
     row.append(cell);
     list.append(row);
     return;
@@ -480,10 +484,11 @@ function renderOpenOrders(orders = []) {
     token.textContent = selectedOutcomeLabel(order.outcome) || '—';
     const marketInfo = document.createElement('div');
     const marketName = document.createElement('strong');
-    marketName.textContent = order.market_title || '未命名市场';
-    marketName.title = `Market ID：${order.market_id}`;
+    if (order.market_title) marketName.textContent = order.market_title;
+    else uiText(marketName, '未命名市场');
+    marketName.title = `Market ID: ${order.market_id}`;
     const orderId = document.createElement('small');
-    orderId.textContent = `${selectedOutcomeLabel(order.outcome)} · 订单 ${order.order_id}`;
+    uiText(orderId, `${selectedOutcomeLabel(order.outcome)} · 订单 ${order.order_id}`);
     marketInfo.append(marketName, orderId);
     market.append(token, marketInfo);
     marketCell.append(market);
@@ -499,7 +504,7 @@ function renderOpenOrders(orders = []) {
     const size = document.createElement('td');
     size.textContent = order.size;
     const age = document.createElement('td');
-    age.textContent = formatOrderAge(order.age_seconds);
+    uiText(age, formatOrderAge(order.age_seconds));
     row.append(marketCell, sideCell, price, size, age);
     list.append(row);
   });
@@ -516,28 +521,28 @@ async function refreshBalance() {
   const note = document.querySelector('#balance-note');
   try {
     const balance = await request('/api/balance');
-    value.textContent = `${formatBalance(balance.balance)} ${balance.asset}`;
-    note.textContent = '链上余额 · 每 30 秒刷新';
+    uiText(value, `${formatBalance(balance.balance)} ${balance.asset}`);
+    uiText(note, '链上余额 · 每 30 秒刷新');
     value.title = balance.account_address;
   } catch (error) {
-    value.textContent = '余额不可用';
-    note.textContent = error.message;
+    uiText(value, '余额不可用');
+    uiText(note, error.message);
     value.removeAttribute('title');
   }
 }
 
 function renderApprovals(result) {
-  approvalStatus.textContent = result.ready
+  uiText(approvalStatus, result.ready
     ? '授权完整'
-    : `缺少 ${result.missing} 项授权`;
+    : `缺少 ${result.missing} 项授权`);
   approvalStatus.className = result.ready ? 'approval-ready' : 'approval-missing';
   approvalSteps.replaceChildren(...(result.steps || []).map((step) => {
     const row = document.createElement('div');
     row.className = 'approval-step';
     const label = document.createElement('span');
-    label.textContent = step.type === 'ERC20_ALLOWANCE' ? 'USDT 交易额度' : '预测份额交易权限';
+    uiText(label, step.type === 'ERC20_ALLOWANCE' ? 'USDT 交易额度' : '预测份额交易权限');
     const state = document.createElement('strong');
-    state.textContent = step.satisfied ? '已授权' : '待授权';
+    uiText(state, step.satisfied ? '已授权' : '待授权');
     state.className = step.satisfied ? 'approval-ready' : 'approval-missing';
     row.append(label, state);
     return row;
@@ -547,12 +552,15 @@ function renderApprovals(result) {
     gasWallet.hidden = false;
     gasWallet.replaceChildren();
     const balance = document.createElement('strong');
-    balance.textContent = `授权 Gas 余额：${formatBalance(result.gas_balance)} ${result.gas_asset}`;
+    uiText(balance, `授权 Gas 余额：${formatBalance(result.gas_balance)} ${result.gas_asset}`);
     balance.className = Number(result.gas_balance) > 0 ? 'approval-ready' : 'approval-missing';
     const address = document.createElement('code');
     address.textContent = result.gas_wallet_address;
-    address.title = '这是 Privy/EOA 签名钱包地址，不是 Predict Account Address';
-    gasWallet.append(balance, document.createTextNode('授权 Gas 钱包地址：'), address);
+    address.setAttribute('data-i18n-title', '这是 Privy/EOA 签名钱包地址，不是 Predict Account Address');
+    address.title = translate(address.getAttribute('data-i18n-title'));
+    const addressLabel = document.createElement('span');
+    uiText(addressLabel, '授权 Gas 钱包地址：');
+    gasWallet.append(balance, addressLabel, address);
   } else {
     gasWallet.hidden = true;
     gasWallet.replaceChildren();
@@ -561,14 +569,14 @@ function renderApprovals(result) {
 
 async function refreshApprovals() {
   checkApprovalsButton.disabled = true;
-  approvalStatus.textContent = '检查中…';
+  uiText(approvalStatus, '检查中…');
   approvalStatus.className = 'muted';
   try {
     const result = await request('/api/approvals');
     renderApprovals(result);
     return result;
   } catch (error) {
-    approvalStatus.textContent = '检查失败';
+    uiText(approvalStatus, '检查失败');
     approvalStatus.className = 'approval-missing';
     approvalSteps.replaceChildren();
     document.querySelector('#gas-wallet').hidden = true;
@@ -584,7 +592,7 @@ async function refreshStatus() {
     const status = await request('/api/status');
     const mode = status.dry_run ? '模拟运行' : '实盘模式';
     const badge = document.querySelector('#mode-badge');
-    badge.textContent = mode;
+    uiText(badge, mode);
     badge.className = `pill ${status.dry_run ? '' : 'live'}`;
     const runStatus = document.querySelector('#run-status');
     botRunning = status.running;
@@ -592,23 +600,23 @@ async function refreshStatus() {
     const parsedExpiry = status.run_expires_at ? Date.parse(status.run_expires_at) : NaN;
     runExpiresAtMs = status.running && Number.isFinite(parsedExpiry) ? parsedExpiry : null;
     updateDurationCountdown();
-    runStatus.textContent = status.running ? '运行中' : (status.configured ? '已停止' : '等待配置');
+    uiText(runStatus, status.running ? '运行中' : (status.configured ? '已停止' : '等待配置'));
     runStatus.className = `metric-value ${status.running ? 'positive' : 'warning'}`;
-    document.querySelector('#run-status-note').textContent = status.running
+    uiText(document.querySelector('#run-status-note'), status.running
       ? '机器人正在管理订单'
-      : (status.configured ? '配置已加载，可以启动' : '请先保存账户和挂单设置');
+      : (status.configured ? '配置已加载，可以启动' : '请先保存账户和挂单设置'));
     const markets = status.markets || [];
-    document.querySelector('#market-value').textContent = markets.length ? `${markets.length} 个市场` : '—';
+    uiText(document.querySelector('#market-value'), markets.length ? `${markets.length} 个市场` : '—');
     document.querySelector('#market-count').textContent = markets.length;
-    document.querySelector('#configured-market-summary').textContent = markets.length
+    uiText(document.querySelector('#configured-market-summary'), markets.length
       ? `已配置 ${markets.length} 个市场`
-      : '尚未配置市场';
-    document.querySelector('#configured-note').textContent = markets.length
+      : '尚未配置市场');
+    uiText(document.querySelector('#configured-note'), markets.length
       ? (status.dry_run ? '当前为模拟运行' : '当前为实盘模式')
-      : '等待加载配置';
+      : '等待加载配置');
     document.querySelector('#risk-total').textContent = status.max_total_position;
     document.querySelector('#risk-market').textContent = status.max_position_per_market;
-    document.querySelector('#risk-emergency').textContent = status.emergency_exit_on_buy_fill ? '已启用' : '未启用';
+    uiText(document.querySelector('#risk-emergency'), status.emergency_exit_on_buy_fill ? '已启用' : '未启用');
     document.querySelector('#risk-emergency').className = status.emergency_exit_on_buy_fill ? 'positive' : 'warning';
     renderOpenOrders(status.open_orders || []);
     document.querySelector('#start-button').disabled = !status.configured || status.running;
@@ -638,18 +646,18 @@ async function refreshStatus() {
       setField('predict_account_address', status.account_address, accountForm);
       setField('log_level', status.log_level, accountForm);
     }
-    document.querySelector('#secret-status').textContent = [
+    uiText(document.querySelector('#secret-status'), [
       status.api_key_set && 'API Key 已保存',
       status.jwt_token_set && 'JWT 已保存',
       status.private_key_set && '私钥已保存',
-    ].filter(Boolean).join(' · ') || '尚未保存实盘密钥';
+    ].filter(Boolean).join(' · ') || '尚未保存实盘密钥');
     const accountReady = status.api_key_set && status.private_key_set;
     const accountBadge = document.querySelector('#account-badge');
-    accountBadge.textContent = accountReady ? '账户已连接' : '账户配置不完整';
+    uiText(accountBadge, accountReady ? '账户已连接' : '账户配置不完整');
     accountBadge.className = `pill ${accountReady ? '' : 'live'}`;
-    document.querySelector('#sidebar-account').textContent = status.account_address
+    uiText(document.querySelector('#sidebar-account'), status.account_address
       ? `${status.account_address.slice(0, 8)}…${status.account_address.slice(-4)}`
-      : (accountReady ? 'EOA 账户已连接' : '账户尚未配置');
+      : (accountReady ? 'EOA 账户已连接' : '账户尚未配置'));
     if (status.last_error) showNotice(`机器人停止：${status.last_error}`, 'error');
   } catch (error) {
     showNotice(error.message, 'error');
@@ -671,9 +679,9 @@ function updateLogRefreshPauseState() {
   logRefreshPaused = paused;
   logPanels.forEach((panel) => panel.classList.toggle('paused', paused));
   logRefreshStatus.classList.toggle('paused', paused);
-  logRefreshStatusText.textContent = paused
+  uiText(logRefreshStatusText, paused
     ? '已暂停（点击日志外恢复）'
-    : '每 2 秒更新';
+    : '每 2 秒更新');
   if (!paused) refreshLogs({force: true});
 }
 
@@ -694,10 +702,14 @@ async function refreshLogs({force = false} = {}) {
       return;
     }
     const logs = document.querySelector('#logs');
+    logs.removeAttribute('data-i18n-source');
     logs.textContent = lines.length ? lines.join('\n') : '暂无运行日志。';
+    if (!lines.length) uiText(logs, '暂无运行日志。');
     logs.scrollTop = logs.scrollHeight;
     const preview = document.querySelector('#dashboard-logs');
+    preview.removeAttribute('data-i18n-source');
     preview.textContent = lines.length ? lines.slice(-6).join('\n') : '暂无运行日志。';
+    if (!lines.length) uiText(preview, '暂无运行日志。');
     preview.scrollTop = preview.scrollHeight;
     logRefreshPending = false;
   } catch (error) {
@@ -800,19 +812,19 @@ accountForm.addEventListener('submit', async (event) => {
 checkApprovalsButton.addEventListener('click', refreshApprovals);
 setApprovalsButton.addEventListener('click', async () => {
   const confirmed = confirm(
-    '设置交易授权会使用已保存的 Privy/EOA 私钥发送链上授权交易，可能产生网络 Gas 费用，但不会创建订单。是否继续？',
+    translate('设置交易授权会使用已保存的 Privy/EOA 私钥发送链上授权交易，可能产生网络 Gas 费用，但不会创建订单。是否继续？'),
   );
   if (!confirmed) return;
   approvalActionRunning = true;
   checkApprovalsButton.disabled = true;
   setApprovalsButton.disabled = true;
-  approvalStatus.textContent = '正在设置…';
+  uiText(approvalStatus, '正在设置…');
   try {
     const result = await request('/api/approvals', {method: 'POST'});
     showNotice(result.message);
     await refreshApprovals();
   } catch (error) {
-    approvalStatus.textContent = '设置失败';
+    uiText(approvalStatus, '设置失败');
     approvalStatus.className = 'approval-missing';
     showNotice(error.message, 'error');
   } finally {
@@ -829,10 +841,14 @@ document.querySelector('#stop-button').addEventListener('click', async () => {
   try { showNotice((await request('/api/stop', {method: 'POST'})).message); await refreshStatus(); } catch (error) { showNotice(error.message, 'error'); }
 });
 document.querySelector('#cancel-button').addEventListener('click', async () => {
-  if (!confirm('确定要撤销所有已配置市场的订单吗？')) return;
+  if (!confirm(translate('确定要撤销所有已配置市场的订单吗？'))) return;
   try { showNotice((await request('/api/cancel-all', {method: 'POST'})).message); } catch (error) { showNotice(error.message, 'error'); }
 });
 document.querySelector('#refresh-logs').addEventListener('click', () => refreshLogs({force: true}));
+
+document.addEventListener('language-save-error', () => {
+  showNotice('语言偏好未能保存，请稍后重试。', 'error');
+});
 
 populateDurationOptions();
 updateDurationFields();

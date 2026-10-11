@@ -4,15 +4,16 @@
 
 A Predict.fun market making tool with a web dashboard, multi-market quoting, automatic cancellation and repricing, and fill monitoring. Available as a Windows desktop app or a service on an Ubuntu/Debian VPS.
 
-**[Download for Windows](https://github.com/Cryptoxiaoxiang/predict-mm-bot/releases/download/v0.1.0-windows-preview.1/PredictMMBot-Windows-x64.zip)** · [Windows instructions](#windows-desktop-app) · [One-command VPS installation](#one-command-vps-installation)
+**[Download for Windows](https://github.com/Cryptoxiaoxiang/predict-mm-bot/releases/download/v0.1.0-windows-preview.2/PredictMMBot-Windows-x64.zip)** · [Windows instructions](#windows-desktop-app) · [One-command VPS installation](#one-command-vps-installation)
 
 > Orders can fill. This tool cannot guarantee that orders will remain unfilled or that emergency sells will execute at a particular price. Try dry-run mode first, then start with a small amount.
 
-![Predict.fun dashboard — interface currently in Chinese](docs/images/dashboard.jpg)
+![Predict.fun dashboard in English](docs/images/dashboard-en.jpg)
 
 ## Features
 
 - Web dashboard: configure your account and markets, control the bot, and view its status.
+- Chinese and English interface: switch languages at the top right; the app remembers your choice.
 - Market URL lookup: paste a Predict.fun market URL and choose the outcome to quote.
 - Multiple markets: manage several markets with separate outcomes and order sizes.
 - Automatic quoting: place, cancel, and reprice orders using the order book and configured lifetime.
@@ -40,9 +41,9 @@ A Predict.fun market making tool with a web dashboard, multi-market quoting, aut
 
 1. Open the **[Windows download page](https://github.com/Cryptoxiaoxiang/predict-mm-bot/releases)** and download `PredictMMBot-Windows-x64.zip` from **Assets**.
 2. Extract the entire ZIP. Keep `PredictMMBot.exe` and the `_internal` folder together, then double-click `PredictMMBot.exe`.
-3. Configure the account under **账户设置** (account settings), save markets under **挂单设置** (quote settings), then click **启动机器人** (start bot) on **总览 Dashboard**.
+3. Choose **English** at the top right if needed. Configure **Account settings**, save markets in **Quote settings**, then click **Start bot** on the **Dashboard**.
 
-Supports 64-bit Windows 10/11 without installing Python. Microsoft Edge WebView2 Runtime is required; install it from [Microsoft](https://developer.microsoft.com/microsoft-edge/webview2/) if it is missing. The initial Windows release is a preview. The app currently uses the Chinese dashboard; this English README translates the guide, not the application interface.
+Supports 64-bit Windows 10/11 without installing Python. Microsoft Edge WebView2 Runtime is required; install it from [Microsoft](https://developer.microsoft.com/microsoft-edge/webview2/) if it is missing. The Windows version is a preview. Switch between Simplified Chinese and English at the top right; the app restores your choice when reopened. Market names keep the language retrieved from the pasted URL, and activity logs retain their original text.
 
 Opening the app starts the dashboard only. Starting live quoting requires clicking the start button. When you close the window normally, the app requests a bot stop and waits for the cancellation process to finish. If it cannot confirm completion, it keeps the window open and shows an error. Sleep, shutdown, or force-quitting interrupts the local bot.
 

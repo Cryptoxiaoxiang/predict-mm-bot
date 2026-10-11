@@ -1,5 +1,6 @@
 .env
 config.toml
+.predict-mm-ui.json
 .venv/
 __pycache__/
 *.py[cod]

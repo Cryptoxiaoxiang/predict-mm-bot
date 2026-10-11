@@ -1,8 +1,14 @@
 # Predict.fun Market making bot 自动做市机器人
 
-这是一个为 Predict.fun 设计的自动挂单、撤单和重新报价工具。它会按设定的策略管理订单，并提供仓位与订单数量限制。
+[简体中文](README.md) | [English](README.en.md)
+
+Predict.fun 自动做市工具，提供网页控制台、多市场挂单、自动撤单重报价和成交监测。支持 Windows 桌面版，以及 Ubuntu/Debian VPS 部署。
+
+**[下载 Windows 桌面版](https://github.com/Cryptoxiaoxiang/predict-mm-bot/releases/download/v0.1.0-windows-preview.1/PredictMMBot-Windows-x64.zip)** · [Windows 使用方法](#windows-桌面版) · [VPS 一键安装](#一条命令安装到服务器推荐)
 
 > 本工具不能保证订单永远不会成交。任何放在订单簿上的订单都有成交风险。第一次使用请尝试模拟运行，并从很小的金额开始。
+
+![Predict.fun 控制台总览](docs/images/dashboard.jpg)
 
 ## 功能简介
 
@@ -28,9 +34,23 @@
 
 - 申请API key, 打开开发者网站申请 https://developers.predict.fun/ ， 教程参考 https://x.com/cryptoxiaoxiang/status/2095794263439397155
 - 在Predict fun网页版点右上角头像，复制用户名下的钱包地址
-- 导出Pravy 的私钥，在PredictFun官网点头像->设置->导出Pravy私钥
-- 将上面复制的钱包地址，Api key，以及Pravy私钥填入机器人控制台的账户设置中就完成了
+- 导出 Privy 的私钥，在 Predict.fun 官网点头像 → 设置 → 导出 Privy 私钥
+- 将上面复制的钱包地址、API Key，以及 Privy 私钥填入机器人控制台的账户设置中就完成了
 - 如果是新钱包，需要在网页上完成一笔任意交易，会自动完成授权
+
+## Windows 桌面版
+
+1. 打开 **[Windows 下载页面](https://github.com/Cryptoxiaoxiang/predict-mm-bot/releases)**，在 **Assets** 中下载 `PredictMMBot-Windows-x64.zip`。
+2. 解压整个压缩包，保留 `PredictMMBot.exe` 和 `_internal` 文件夹，双击 `PredictMMBot.exe`。
+3. 在“账户设置”填写 API Key、钱包地址和私钥；保存账户和挂单设置后，点击“启动机器人”。
+
+支持 Windows 10/11 64 位，不需要安装 Python。需要 Microsoft Edge WebView2 Runtime，缺少时可从[微软官网](https://developer.microsoft.com/microsoft-edge/webview2/)安装。首个 Windows 版本为预览版，沿用现有中文控制台；英文 README 是使用说明的语言切换，不会改变应用界面语言。
+
+双击应用只会打开控制台，不会自动开始挂单。正常关闭窗口时，应用会先请求停止机器人并等待撤单流程结束；无法确认完成时会保持窗口打开并提示原因。电脑睡眠、关机或强制结束应用会中断本地机器人。
+
+账户配置、日志和订单记录保存在 `%LOCALAPPDATA%\PredictMMBot`，更新应用时无需重新输入账户设置。不要将这个目录或里面的 `.env` 文件发送给别人。更新前先停止并撤单、关闭应用，再解压新版到一个新文件夹。
+
+下载页面中的 `Source code` 是源码，普通 Windows 用户请选择 `PredictMMBot-Windows-x64.zip`。长期无人值守运行建议使用下面的 VPS 版本。
 
 ## 一条命令安装到服务器（推荐）
 

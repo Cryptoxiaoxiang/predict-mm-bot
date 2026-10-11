@@ -1,0 +1,54 @@
+name: Build Windows desktop app
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/windows-desktop
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install application and packaging dependencies
+        run: python -m pip install ".[desktop,windows-build,dev]"
+      - name: Check desktop and dashboard behavior
+        run: python -m pytest -q tests/test_desktop.py tests/test_web.py
+      - name: Check interface translations
+        run: node --test tests/test_i18n.cjs
+      - name: Build desktop app
+        run: >-
+          python -m PyInstaller --noconfirm --clean --onedir --windowed
+          --name PredictMMBot --paths .
+          --add-data "predict_mm/web_static;predict_mm/web_static"
+          --collect-submodules uvicorn --collect-submodules predict_sdk
+          desktop_entry.py
+      - name: Smoke-test packaged executable
+        shell: pwsh
+        run: |
+          $env:PREDICT_MM_SMOKE_LOG = Join-Path $env:RUNNER_TEMP 'predict-mm-smoke-error.txt'
+          $exe = (Resolve-Path 'dist/PredictMMBot/PredictMMBot.exe').Path
+          $process = Start-Process -FilePath $exe -ArgumentList '--smoke-test' -PassThru
+          if (-not $process.WaitForExit(60000)) {
+            Stop-Process -Id $process.Id -Force
+            throw 'Packaged application did not complete the startup check within 60 seconds.'
+          }
+          if ($process.ExitCode -ne 0) {
+            if (Test-Path $env:PREDICT_MM_SMOKE_LOG) { Get-Content $env:PREDICT_MM_SMOKE_LOG }
+            throw "Packaged application failed startup check with exit code $($process.ExitCode)."
+          }
+      - name: Upload Windows app
+        uses: actions/upload-artifact@v4
+        with:
+          name: PredictMMBot-Windows
+          path: dist/PredictMMBot/
+          if-no-files-found: error

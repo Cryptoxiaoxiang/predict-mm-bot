@@ -21,6 +21,12 @@ dev = [
   "pytest>=8.0",
   "ruff>=0.5",
 ]
+desktop = [
+  "pywebview>=5,<7",
+]
+windows-build = [
+  "pyinstaller>=6,<7",
+]
 
 [tool.setuptools.packages.find]
 include = ["predict_mm*"]
